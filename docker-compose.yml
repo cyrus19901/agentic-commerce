@@ -1,0 +1,60 @@
+# Docker Compose file for production
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentic-commerce-api
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
+      - DATABASE_URL=/app/data/shopping.db
+      - ALLOWED_ORIGINS=https://chat.openai.com,https://chatgpt.com
+    volumes:
+      # Mount data directory for persistent database
+      - ./data:/app/data
+      # Mount source for development (optional - comment out for production)
+      - ./packages/api/src:/app/packages/api/src
+      - ./packages/core/src:/app/packages/core/src
+      - ./packages/database/src:/app/packages/database/src
+      - ./packages/integrations/src:/app/packages/integrations/src
+      - ./packages/shared/src:/app/packages/shared/src
+    restart: unless-stopped
+    networks:
+      - agentic-commerce-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Add a database viewer
+  db-viewer:
+    image: coleifer/sqlite-web:latest
+    container_name: agentic-commerce-db-viewer
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      - SQLITE_DATABASE=/data/shopping.db
+    depends_on:
+      - api
+    networks:
+      - agentic-commerce-network
+    profiles:
+      - tools
+
+networks:
+  agentic-commerce-network:
+    driver: bridge
+
+volumes:
+  data:
+    driver: local
+
