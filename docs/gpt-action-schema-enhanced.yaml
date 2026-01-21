@@ -1,0 +1,366 @@
+openapi: 3.1.0
+info:
+  title: Agentic Commerce API - Enhanced
+  description: API for ChatGPT shopping assistant with advanced policy enforcement and Stripe payments
+  version: 2.0.0
+servers:
+  - url: https://census-mono-implemented-catch.trycloudflare.com
+    description: Cloudflare Tunnel
+
+paths:
+  /api/products/search:
+    post:
+      operationId: searchProducts
+      summary: Search for products with images and links
+      description: Search for products on Etsy with optional filters. Returns products with images, links, and formatted display text.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: Search query (e.g., "leather notebook", "vintage lamp")
+                max_price:
+                  type: number
+                  description: Maximum price filter
+                category:
+                  type: string
+                  description: Product category filter
+                limit:
+                  type: integer
+                  description: Number of results to return (default 10)
+                  default: 10
+      responses:
+        '200':
+          description: Successful search with enriched product data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  products:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        title:
+                          type: string
+                        description:
+                          type: string
+                        price:
+                          type: number
+                        formattedPrice:
+                          type: string
+                          description: Formatted price string (e.g., "$89.99")
+                        currency:
+                          type: string
+                        merchant:
+                          type: string
+                        merchantId:
+                          type: string
+                        url:
+                          type: string
+                          description: Direct link to product page
+                        imageUrl:
+                          type: string
+                          description: Product image URL
+                        category:
+                          type: string
+                        inStock:
+                          type: boolean
+                        displayIndex:
+                          type: integer
+                          description: Display number for easy reference
+                        displayText:
+                          type: string
+                          description: Pre-formatted text for display
+                  count:
+                    type: integer
+                  query:
+                    type: string
+
+  /api/policy/check:
+    post:
+      operationId: checkPolicy
+      summary: Check if purchase complies with policies
+      description: Verify if a purchase is allowed based on user policies with detailed violation information
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_id
+                - product_id
+                - price
+                - merchant
+              properties:
+                user_id:
+                  type: string
+                  description: User identifier
+                product_id:
+                  type: string
+                  description: Product identifier
+                price:
+                  type: number
+                  description: Product price
+                merchant:
+                  type: string
+                  description: Merchant/shop name
+                category:
+                  type: string
+                  description: Product category
+      responses:
+        '200':
+          description: Policy check result with detailed violations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  allowed:
+                    type: boolean
+                  reason:
+                    type: string
+                  violations:
+                    type: array
+                    items:
+                      type: string
+                  matchedPolicies:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        name:
+                          type: string
+                        passed:
+                          type: boolean
+                        reason:
+                          type: string
+                  budgetInfo:
+                    type: object
+                    properties:
+                      remaining:
+                        type: number
+                      limit:
+                        type: number
+                      period:
+                        type: string
+                      spent:
+                        type: number
+
+  /api/policy/budget:
+    post:
+      operationId: getUserBudget
+      summary: Get user budget information
+      description: Retrieve user's budget limits and current spending
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_id
+              properties:
+                user_id:
+                  type: string
+                  description: User identifier
+      responses:
+        '200':
+          description: Budget information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  userId:
+                    type: string
+                  budgets:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        period:
+                          type: string
+                          enum: [DAILY, WEEKLY, MONTHLY, YEARLY]
+                        limit:
+                          type: number
+                        spent:
+                          type: number
+                        remaining:
+                          type: number
+
+  /api/checkout/initiate:
+    post:
+      operationId: initiateCheckout
+      summary: Initiate Stripe checkout
+      description: Create a Stripe checkout session for a product (policy check required first)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_id
+                - product_id
+                - amount
+                - merchant
+                - product_name
+              properties:
+                user_id:
+                  type: string
+                product_id:
+                  type: string
+                amount:
+                  type: number
+                merchant:
+                  type: string
+                category:
+                  type: string
+                product_name:
+                  type: string
+                product_url:
+                  type: string
+                product_image_url:
+                  type: string
+      responses:
+        '200':
+          description: Checkout session created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  sessionId:
+                    type: string
+                  checkoutUrl:
+                    type: string
+                    description: Stripe checkout URL for user to complete payment
+                  invoiceUrl:
+                    type: string
+                  productId:
+                    type: string
+                  productName:
+                    type: string
+                  amount:
+                    type: number
+                  currency:
+                    type: string
+                  message:
+                    type: string
+        '403':
+          description: Purchase not allowed by policy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  reason:
+                    type: string
+                  violations:
+                    type: array
+                    items:
+                      type: string
+
+  /api/checkout/status:
+    post:
+      operationId: getCheckoutStatus
+      summary: Check payment status
+      description: Get the status of a Stripe checkout session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - session_id
+              properties:
+                session_id:
+                  type: string
+      responses:
+        '200':
+          description: Checkout status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  status:
+                    type: string
+                  paymentStatus:
+                    type: string
+                  amountTotal:
+                    type: number
+                  currency:
+                    type: string
+
+  /api/purchases:
+    get:
+      operationId: getUserPurchases
+      summary: Get user purchase history
+      description: Retrieve user's purchase history
+      responses:
+        '200':
+          description: Purchase history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  purchases:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        productId:
+                          type: string
+                        productName:
+                          type: string
+                        productUrl:
+                          type: string
+                        productImageUrl:
+                          type: string
+                        merchant:
+                          type: string
+                        category:
+                          type: string
+                        amount:
+                          type: number
+                        currency:
+                          type: string
+                        status:
+                          type: string
+                        createdAt:
+                          type: string
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - BearerAuth: []
+

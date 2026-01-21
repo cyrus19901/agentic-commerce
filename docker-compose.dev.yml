@@ -1,0 +1,35 @@
+# Docker Compose file for development
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: agentic-commerce-api-dev
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
+      - DATABASE_URL=/app/data/shopping.db
+      - ALLOWED_ORIGINS=https://chat.openai.com,https://chatgpt.com
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - ETSY_API_KEY=${ETSY_API_KEY:-}
+      - API_URL=http://localhost:3000
+      - FRONTEND_URL=http://localhost:3000
+    volumes:
+      # Mount entire source for hot reload
+      - .:/app
+      - /app/node_modules
+      - ./data:/app/data
+    command: npm run dev
+    restart: unless-stopped
+    networks:
+      - agentic-commerce-network
+
+networks:
+  agentic-commerce-network:
+    driver: bridge
+

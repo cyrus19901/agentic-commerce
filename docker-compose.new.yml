@@ -1,0 +1,56 @@
+# Docker Compose for Agentic Commerce with PostgreSQL
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: agentic-commerce-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agentic_commerce
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agentic-commerce-network
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: agentic-commerce-api-dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentic_commerce?schema=public
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - API_URL=http://localhost:3000
+      - FRONTEND_URL=http://localhost:3000
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: sh -c "cd packages/database && npx prisma generate && npx prisma db push --accept-data-loss && npx tsx prisma/seed.ts && cd ../.. && npm run dev"
+    restart: unless-stopped
+    networks:
+      - agentic-commerce-network
+
+networks:
+  agentic-commerce-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+

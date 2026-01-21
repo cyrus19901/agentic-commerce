@@ -1,0 +1,30 @@
+{
+  "name": "agentic-commerce",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "setup": "npm install && npm run build && npm run db:setup",
+    "dev": "npm run dev --workspace=@agentic-commerce/api",
+    "build": "npm run build --workspaces --if-present",
+    "start": "npm run start --workspace=@agentic-commerce/api",
+    "test": "npm run test --workspaces --if-present",
+    "db:setup": "npm run db:setup --workspace=@agentic-commerce/database",
+    "generate-token": "tsx scripts/generate-token.ts",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.3.0",
+    "prisma": "^7.3.0",
+    "stripe": "^20.2.0"
+  }
+}

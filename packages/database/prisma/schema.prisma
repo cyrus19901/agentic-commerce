@@ -1,0 +1,131 @@
+// Prisma Schema for Agentic Commerce
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  USER
+}
+
+enum PolicyType {
+  BUDGET_LIMIT
+  TRANSACTION_LIMIT
+  MERCHANT_ALLOWLIST
+  MERCHANT_BLOCKLIST
+  CATEGORY_ALLOWLIST
+  CATEGORY_BLOCKLIST
+  TIME_RESTRICTION
+}
+
+enum PeriodType {
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+enum PurchaseStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  role      Role     @default(USER)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  policies  UserPolicy[]
+  purchases Purchase[]
+
+  @@index([email])
+}
+
+model Policy {
+  id          String     @id @default(cuid())
+  name        String
+  description String?
+  type        PolicyType
+  active      Boolean    @default(true)
+  priority    Int        @default(0)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Budget/Transaction limits
+  amount     Float?
+  periodType PeriodType?
+
+  // Merchant/Category lists
+  merchants  String[] // Array of merchant names
+  categories String[] // Array of category names
+
+  // Time restrictions
+  startTime  String? // HH:MM format
+  endTime    String? // HH:MM format
+  daysOfWeek Int[] // 0-6, Sunday = 0
+
+  users UserPolicy[]
+
+  @@index([type, active])
+}
+
+model UserPolicy {
+  id        String   @id @default(cuid())
+  userId    String
+  policyId  String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  policy Policy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, policyId])
+  @@index([userId, active])
+}
+
+model Purchase {
+  id              String         @id @default(cuid())
+  userId          String
+  productId       String
+  productName     String
+  productUrl      String?
+  productImageUrl String?
+  merchant        String
+  category        String?
+  amount          Float
+  currency        String         @default("USD")
+  status          PurchaseStatus @default(PENDING)
+
+  // Policy validation
+  policyCheckPassed Boolean  @default(false)
+  policyViolations  String[] // Array of policy violation messages
+
+  // Payment details
+  stripeSessionId String?
+  stripePaymentId String?
+  invoiceUrl      String?
+
+  // Metadata
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([createdAt])
+}
+

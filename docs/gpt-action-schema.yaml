@@ -1,0 +1,274 @@
+openapi: 3.1.0
+info:
+  title: Agentic Commerce API
+  description: API for ChatGPT shopping assistant with policy enforcement
+  version: 1.0.0
+servers:
+  - url: https://census-mono-implemented-catch.trycloudflare.com
+    description: Cloudflare Tunnel
+
+paths:
+  /api/products/search:
+    post:
+      operationId: searchProducts
+      summary: Search for products
+      description: Search for products on Etsy with optional filters
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: Search query (e.g., "leather notebook", "vintage lamp")
+                max_price:
+                  type: number
+                  description: Maximum price filter
+                category:
+                  type: string
+                  description: Product category filter
+                limit:
+                  type: integer
+                  description: Number of results to return (default 10)
+                  default: 10
+      responses:
+        '200':
+          description: Successful search
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  products:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        title:
+                          type: string
+                        description:
+                          type: string
+                        price:
+                          type: number
+                        currency:
+                          type: string
+                        merchant:
+                          type: string
+                        merchantId:
+                          type: string
+                        url:
+                          type: string
+                        imageUrl:
+                          type: string
+                        category:
+                          type: string
+                        inStock:
+                          type: boolean
+
+  /api/policy/check:
+    post:
+      operationId: checkPolicy
+      summary: Check if purchase complies with policies
+      description: Verify if a purchase is allowed based on company policies
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_id
+                - product_id
+                - price
+                - merchant
+              properties:
+                user_id:
+                  type: string
+                  description: User identifier
+                product_id:
+                  type: string
+                  description: Product identifier
+                price:
+                  type: number
+                  description: Product price
+                merchant:
+                  type: string
+                  description: Merchant/shop name
+                category:
+                  type: string
+                  description: Product category
+      responses:
+        '200':
+          description: Policy check result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  allowed:
+                    type: boolean
+                  reason:
+                    type: string
+                  matchedPolicies:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        name:
+                          type: string
+                        passed:
+                          type: boolean
+                        reason:
+                          type: string
+
+  /api/policy/spending:
+    post:
+      operationId: getSpending
+      summary: Get user spending summary
+      description: Retrieve user's spending for different time periods
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_id
+              properties:
+                user_id:
+                  type: string
+                  description: User identifier
+      responses:
+        '200':
+          description: Spending summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  userId:
+                    type: string
+                  spending:
+                    type: object
+                    properties:
+                      daily:
+                        type: number
+                      weekly:
+                        type: number
+                      monthly:
+                        type: number
+
+  /api/checkout/initiate:
+    post:
+      operationId: initiateCheckout
+      summary: Initiate checkout process
+      description: Create a checkout session for a product
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_id
+                - product_id
+                - amount
+                - product_name
+                - merchant
+              properties:
+                user_id:
+                  type: string
+                product_id:
+                  type: string
+                product_name:
+                  type: string
+                  description: Name of the product
+                amount:
+                  type: number
+                merchant:
+                  type: string
+                category:
+                  type: string
+                product_url:
+                  type: string
+                  description: URL to the product page
+                product_image_url:
+                  type: string
+                  description: URL to the product image
+      responses:
+        '200':
+          description: Checkout session created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  checkout_session_id:
+                    type: string
+                  checkout_url:
+                    type: string
+                  expires_at:
+                    type: string
+
+  /api/checkout/complete:
+    post:
+      operationId: completeCheckout
+      summary: Complete checkout
+      description: Finalize a purchase after payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - session_id
+                - user_id
+              properties:
+                session_id:
+                  type: string
+                user_id:
+                  type: string
+      responses:
+        '200':
+          description: Purchase completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  message:
+                    type: string
+                  invoice:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      orderId:
+                        type: string
+                      amount:
+                        type: number
+                      status:
+                        type: string
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - BearerAuth: []
+
+
