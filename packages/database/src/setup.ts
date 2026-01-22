@@ -33,16 +33,16 @@ const defaultPolicies: Policy[] = [
 ];
 
 (async () => {
-  console.log('Setting up database...');
+console.log('Setting up database...');
 
-  for (const policy of defaultPolicies) {
-    try {
-      await db.createPolicy(policy);
-      console.log(`✓ Created policy: ${policy.name}`);
-    } catch (e) {
-      console.log(`Policy ${policy.name} already exists`);
-    }
+for (const policy of defaultPolicies) {
+  try {
+    await db.createPolicy(policy);
+    console.log(`✓ Created policy: ${policy.name}`);
+  } catch (e) {
+    console.log(`Policy ${policy.name} already exists`);
   }
+}
 
-  console.log('✓ Database setup complete!');
+console.log('✓ Database setup complete!');
 })();
