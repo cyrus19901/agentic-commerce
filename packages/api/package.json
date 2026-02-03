@@ -2,7 +2,6 @@
   "name": "@agentic-commerce/api",
   "version": "1.0.0",
   "main": "dist/index.js",
-  "type": "module",
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/index.ts",

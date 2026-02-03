@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: agentic-commerce-api
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        value: /data/shopping.db
+      - key: JWT_SECRET
+        generateValue: true
+      - key: STRIPE_SECRET_KEY
+        sync: false  # You'll need to set this manually in Render dashboard
+    disk:
+      name: agentic-commerce-data
+      mountPath: /data
+      sizeGB: 1

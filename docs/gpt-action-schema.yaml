@@ -1,18 +1,173 @@
 openapi: 3.1.0
 info:
   title: Agentic Commerce API
-  description: API for ChatGPT shopping assistant with policy enforcement
+  description: |
+    API for ChatGPT shopping assistant with policy enforcement.
+    
+    IMPORTANT CONTEXT FOR CHATGPT:
+    
+    **Available Products:**
+    IMPORTANT: You have 30+ products available in the catalog. ALWAYS use searchProducts to find items.
+    Available inventory includes:
+    - Office supplies: notebooks ($19.99), pens ($14.99), sticky notes ($12.99), desk organizers ($34.99)
+    - Office furniture: ergonomic chairs ($249.99), standing desks ($179.99), monitor stands ($79.99)
+    - Electronics: headphones ($199.99), keyboards ($129.99), mice ($49.99), webcams ($149.99), USB hubs ($59.99)
+    - Bags & purses: leather notebooks ($28-$42), briefcases, backpacks ($89.99), crossbody purses
+    - Travel: luggage tags ($18.99), passport holders ($27.99), travel adapters ($32.99)
+    - Jewelry: necklaces ($79-$89), rings ($125), bracelets ($149), earrings ($199)
+    
+    When users ask for products, SEARCH FIRST using searchProducts - products are available!
+    
+    **Policy Enforcement:**
+    Before completing any purchase, you MUST call checkPolicy to verify the transaction complies with company policies.
+    Policies may restrict:
+    - Transaction amounts (maximum per transaction)
+    - Budget limits (daily, weekly, or monthly spending caps)
+    - Merchant restrictions (allowed or blocked merchants)
+    - Category restrictions (allowed or blocked product categories)
+    - Time-based restrictions (allowed times of day or days of week)
+    - Agent-based restrictions (which AI agents can make purchases)
+    - Purpose-based restrictions (transaction purposes)
+    
+    If a policy check fails, you MUST inform the user and explain why the purchase cannot proceed.
+    If a policy check requires approval, you MUST inform the user that manual approval is needed.
+    
+    **User Authentication:**
+    - Ask for user's email naturally in conversation if not already provided
+    - Include "user_email" field in ALL API requests
+    - Example: {"query": "notebook", "user_email": "cyrus19901@gmail.com"}
+    - The system uses email for authentication and policy checks
+    
+    **Workflow (Traditional):**
+    1. User asks for a product → Use searchProducts to find matching items
+    2. User wants to purchase → Call checkPolicy first to verify compliance
+    3. If policy check passes → Call initiateCheckout to create payment session
+    4. After payment → Call completeCheckout to finalize purchase
+    
+    **Workflow (ACP-Compliant):**
+    1. User asks for a product → Use searchProducts to find matching items
+    2. User wants to purchase → Call /checkout (includes automatic policy check)
+    3. After payment → Use /delegate-payment if needed
+    4. Track order → Use /fulfillment endpoints
+    
+    **Stripe Agents Toolkit:**
+    - Use createPaymentLink to create payment links dynamically
+    - Use createProduct and createPrice for dynamic product creation
+    - These work alongside traditional checkout flow
+    
+    Always check policies BEFORE initiating checkout!
   version: 1.0.0
 servers:
-  - url: https://census-mono-implemented-catch.trycloudflare.com
-    description: Cloudflare Tunnel
+  - url: https://agentic-commerce-api-latest.onrender.com
+    description: Production server (Render deployment)
+  - url: http://localhost:3000
+    description: Local development server
 
 paths:
+  /api/auth/create-user:
+    post:
+      operationId: createUser
+      summary: Create a new user account
+      description: |
+        Create a new user account or retrieve existing user. 
+        Call this FIRST when a new user wants to start shopping.
+        Returns user details that can be used to generate authentication token.
+      security: []  # No auth required for user creation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: User's email address
+                  example: "user@example.com"
+                name:
+                  type: string
+                  description: User's full name (optional)
+                  example: "John Doe"
+      responses:
+        '200':
+          description: User created or retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  user:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      email:
+                        type: string
+                      name:
+                        type: string
+                  message:
+                    type: string
+
+  /api/auth/generate-token:
+    post:
+      operationId: generateToken
+      summary: Generate authentication token
+      description: |
+        Generate a JWT token for authentication.
+        Call this AFTER creating a user to get their access token.
+        Store this token and use it for all subsequent API calls.
+      security: []  # No auth required for token generation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: User's email address
+                  example: "user@example.com"
+      responses:
+        '200':
+          description: Token generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  token:
+                    type: string
+                    description: JWT token for authentication (use in Authorization header as "Bearer {token}")
+                  userId:
+                    type: string
+                  email:
+                    type: string
+                  name:
+                    type: string
+                  expiresIn:
+                    type: string
+                    description: Token expiration period
+                  message:
+                    type: string
+
   /api/products/search:
     post:
       operationId: searchProducts
-      summary: Search for products
-      description: Search for products on Etsy with optional filters
+      summary: Search for products in the store
+      description: |
+        Search for products. Categories: Office Supplies, Electronics, Bags & Purses, Travel.
+        Examples: "notebook", "chair", "headphones", "backpack". Products include imageUrl for display.
       requestBody:
         required: true
         content:
@@ -21,7 +176,13 @@ paths:
               type: object
               required:
                 - query
+                - user_email
               properties:
+                user_email:
+                  type: string
+                  format: email
+                  description: User's email address (REQUIRED for all requests)
+                  example: "cyrus19901@gmail.com"
                 query:
                   type: string
                   description: Search query (e.g., "leather notebook", "vintage lamp")
@@ -66,6 +227,8 @@ paths:
                           type: string
                         imageUrl:
                           type: string
+                          description: Product image URL (HTTPS, publicly accessible)
+                          example: "https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=400&h=400&fit=crop"
                         category:
                           type: string
                         inStock:
@@ -75,7 +238,10 @@ paths:
     post:
       operationId: checkPolicy
       summary: Check if purchase complies with policies
-      description: Verify if a purchase is allowed based on company policies
+      description: |
+        CRITICAL: Call BEFORE checkout. Verifies compliance with policies.
+        If "allowed: false", do NOT proceed. If "requiresApproval: true", inform user.
+        Include user_email in request body.
       requestBody:
         required: true
         content:
@@ -83,14 +249,19 @@ paths:
             schema:
               type: object
               required:
-                - user_id
                 - product_id
                 - price
                 - merchant
+                - user_email
               properties:
+                user_email:
+                  type: string
+                  format: email
+                  description: User's email address (REQUIRED)
+                  example: "cyrus19901@gmail.com"
                 user_id:
                   type: string
-                  description: User identifier
+                  description: User identifier (OPTIONAL - extracted from user_email)
                 product_id:
                   type: string
                   description: Product identifier
@@ -102,7 +273,25 @@ paths:
                   description: Merchant/shop name
                 category:
                   type: string
-                  description: Product category
+                  description: Product category (e.g., "Office Supplies", "Electronics", "Bags & Purses", "Travel & Accessories")
+                agent_name:
+                  type: string
+                  description: Name of the AI agent making the request (optional, for agent-based policies)
+                agent_type:
+                  type: string
+                  description: Type of AI agent (optional, for agent-based policies)
+                time_of_day:
+                  type: string
+                  description: Time of day in HH:MM format (optional, for time-based policies)
+                day_of_week:
+                  type: integer
+                  description: Day of week (0-6, Sunday=0) (optional, for time-based policies)
+                recipient_agent:
+                  type: string
+                  description: Recipient agent name (optional, for agent-based policies)
+                purpose:
+                  type: string
+                  description: Transaction purpose (optional, for purpose-based policies)
       responses:
         '200':
           description: Policy check result
@@ -113,8 +302,16 @@ paths:
                 properties:
                   allowed:
                     type: boolean
+                    description: Whether the purchase is allowed. If false, do NOT proceed with checkout.
                   reason:
                     type: string
+                    description: Explanation of why the purchase is allowed or denied
+                  requiresApproval:
+                    type: boolean
+                    description: If true, manual approval is required before purchase can proceed
+                  flaggedForReview:
+                    type: boolean
+                    description: If true, the transaction should be flagged for review even if allowed
                   matchedPolicies:
                     type: array
                     items:
@@ -141,11 +338,16 @@ paths:
             schema:
               type: object
               required:
-                - user_id
+                - user_email
               properties:
+                user_email:
+                  type: string
+                  format: email
+                  description: User's email address (REQUIRED)
+                  example: "cyrus19901@gmail.com"
                 user_id:
                   type: string
-                  description: User identifier
+                  description: User identifier (OPTIONAL - extracted from user_email)
       responses:
         '200':
           description: Spending summary
@@ -170,7 +372,10 @@ paths:
     post:
       operationId: initiateCheckout
       summary: Initiate checkout process
-      description: Create a checkout session for a product
+      description: |
+        Create a checkout session for a product. 
+        NOTE: If Stripe is not configured, this returns a mock checkout URL pointing to the product's direct purchase link.
+        The checkout service is functional - use the returned checkout_url to proceed with purchase.
       requestBody:
         required: true
         content:
@@ -178,14 +383,20 @@ paths:
             schema:
               type: object
               required:
-                - user_id
                 - product_id
                 - amount
                 - product_name
                 - merchant
+                - user_email
               properties:
+                user_email:
+                  type: string
+                  format: email
+                  description: User's email address (REQUIRED)
+                  example: "cyrus19901@gmail.com"
                 user_id:
                   type: string
+                  description: User identifier (OPTIONAL - extracted from user_email if not provided)
                 product_id:
                   type: string
                 product_name:
@@ -231,12 +442,18 @@ paths:
               type: object
               required:
                 - session_id
-                - user_id
+                - user_email
               properties:
                 session_id:
                   type: string
+                user_email:
+                  type: string
+                  format: email
+                  description: User's email address (REQUIRED)
+                  example: "cyrus19901@gmail.com"
                 user_id:
                   type: string
+                  description: User identifier (OPTIONAL - extracted from user_email)
       responses:
         '200':
           description: Purchase completed
@@ -262,13 +479,19 @@ paths:
                         type: string
 
 components:
+  schemas: {}
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: |
+        JWT token obtained from /api/auth/generate-token.
+        Include in Authorization header as: Bearer {token}
 
-security:
-  - BearerAuth: []
+security: []
+  # Authentication is optional. For ChatGPT integration:
+  # - Either configure a Bearer token in ChatGPT (for single-user testing)
+  # - Or leave authentication empty and the API will use user email from requests
 
 

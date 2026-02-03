@@ -13,6 +13,7 @@
     "test": "npm run test --workspaces --if-present",
     "db:setup": "npm run db:setup --workspace=@agentic-commerce/database",
     "generate-token": "tsx scripts/generate-token.ts",
+    "create-user": "tsx scripts/create-user-and-token.ts",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist"
