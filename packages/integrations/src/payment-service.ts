@@ -45,8 +45,12 @@ export class PaymentService {
   }
 
   async initiateCheckout(request: CheckoutRequest): Promise<CheckoutResponse> {
-    // If no Stripe key, return mock success for development
-    if (!this.stripe) {
+    // DEVELOPMENT MODE: Use mock checkout for policy testing
+    // Set USE_MOCK_PAYMENTS=true in .env to skip Stripe and test policies
+    const useMockPayments = process.env.USE_MOCK_PAYMENTS === 'true' || process.env.NODE_ENV === 'development';
+    
+    if (useMockPayments || !this.stripe) {
+      console.log('🧪 Using mock checkout (policy testing mode)');
       return this.getMockCheckoutResponse(request);
     }
 
@@ -83,7 +87,7 @@ export class PaymentService {
         success: true,
         sessionId: session.id,
         checkoutUrl: session.url!,
-        invoiceUrl: `${process.env.API_URL || 'http://localhost:3000'}/api/invoices/${session.id}`,
+        invoiceUrl: `https://agentic-commerce-api-latest.onrender.com/api/invoices/${session.id}`,
         productId: request.productId,
         productName: request.productName,
         amount: request.amount,
@@ -166,16 +170,18 @@ export class PaymentService {
 
   private getMockCheckoutResponse(request: CheckoutRequest): CheckoutResponse {
     const mockSessionId = `mock_session_${Date.now()}`;
+    // Return a success response that indicates mock mode but allows the flow to continue
+    // ChatGPT can handle this by showing the product link directly
     return {
       success: true,
       sessionId: mockSessionId,
-      checkoutUrl: `https://checkout.stripe.com/mock/${mockSessionId}`,
-      invoiceUrl: `http://localhost:3000/api/invoices/${mockSessionId}`,
+      checkoutUrl: request.productUrl || `https://example.com/product/${request.productId}`,
+      invoiceUrl: `https://agentic-commerce-api-latest.onrender.com/api/invoices/${mockSessionId}`,
       productId: request.productId,
       productName: request.productName,
       amount: request.amount,
       currency: 'USD',
-      message: '⚠️ Mock checkout - Stripe not configured. Use this URL to simulate payment.',
+      message: '✅ Purchase approved by policy! In production, this would process payment. Product link: ' + (request.productUrl || 'N/A'),
     };
   }
 }

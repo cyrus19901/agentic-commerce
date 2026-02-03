@@ -26,7 +26,7 @@ RUN npm run build
 # Production stage
 FROM node:20-alpine
 
-RUN apk add --no-cache sqlite
+RUN apk add --no-cache sqlite wget
 
 WORKDIR /app
 
@@ -38,13 +38,17 @@ COPY --from=builder /app/packages ./packages
 # Create data directory for SQLite
 RUN mkdir -p /app/data
 
+# Copy entrypoint script
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
 # Expose port
 EXPOSE 3000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
+# Health check with longer timeout for cold starts
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
 
 # Start the application
-CMD ["npm", "start"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 

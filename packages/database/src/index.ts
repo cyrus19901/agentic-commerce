@@ -436,6 +436,81 @@ export class DB {
     }));
   }
 
+  /**
+   * Clean up duplicate users (keep oldest, merge policies/purchases)
+   */
+  async cleanupDuplicateUsers(): Promise<{
+    duplicatesFound: Array<{ email: string; userIds: string[] }>;
+    usersDeleted: string[];
+    policiesMigrated: number;
+    purchasesMigrated: number;
+    errors: string[];
+  }> {
+    const results = {
+      duplicatesFound: [] as Array<{ email: string; userIds: string[] }>,
+      usersDeleted: [] as string[],
+      policiesMigrated: 0,
+      purchasesMigrated: 0,
+      errors: [] as string[]
+    };
+
+    // Find duplicate emails
+    const duplicateEmails = this.db.prepare(`
+      SELECT email, COUNT(*) as count, GROUP_CONCAT(id) as user_ids
+      FROM users
+      GROUP BY email
+      HAVING count > 1
+    `).all() as Array<{ email: string; count: number; user_ids: string }>;
+
+    for (const dup of duplicateEmails) {
+      const userIds = dup.user_ids.split(',');
+      results.duplicatesFound.push({ email: dup.email, userIds });
+      
+      // Get all users with this email, sorted by creation date (keep oldest)
+      const users = this.db.prepare('SELECT * FROM users WHERE email = ? ORDER BY created_at ASC').all(dup.email) as any[];
+      
+      if (users.length < 2) continue;
+      
+      const keepUser = users[0];
+      const deleteUsers = users.slice(1);
+
+      for (const delUser of deleteUsers) {
+        // Migrate policies
+        const policies = this.db.prepare('SELECT * FROM user_policies WHERE user_id = ?').all(delUser.id) as any[];
+        
+        for (const policy of policies) {
+          try {
+            const existing = this.db.prepare(
+              'SELECT * FROM user_policies WHERE user_id = ? AND policy_id = ?'
+            ).get(keepUser.id, policy.policy_id);
+            
+            if (!existing) {
+              this.db.prepare('UPDATE user_policies SET user_id = ? WHERE id = ?').run(keepUser.id, policy.id);
+              results.policiesMigrated++;
+            } else {
+              this.db.prepare('DELETE FROM user_policies WHERE id = ?').run(policy.id);
+            }
+          } catch (error: any) {
+            results.errors.push(`Policy migration error: ${error.message}`);
+          }
+        }
+        
+        // Migrate purchase attempts
+        const purchaseCount = this.db.prepare('SELECT COUNT(*) as count FROM purchase_attempts WHERE user_id = ?').get(delUser.id) as { count: number };
+        if (purchaseCount.count > 0) {
+          this.db.prepare('UPDATE purchase_attempts SET user_id = ? WHERE user_id = ?').run(keepUser.id, delUser.id);
+          results.purchasesMigrated += purchaseCount.count;
+        }
+        
+        // Delete duplicate user
+        this.db.prepare('DELETE FROM users WHERE id = ?').run(delUser.id);
+        results.usersDeleted.push(delUser.id);
+      }
+    }
+
+    return results;
+  }
+
   // ============================================================================
   // Approval Management Methods
   // ============================================================================
