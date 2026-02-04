@@ -32,9 +32,9 @@ export class PaymentService {
     if (apiKey && (apiKey.startsWith('sk_test_') || apiKey.startsWith('sk_live_'))) {
       try {
         this.stripe = new Stripe(apiKey, {
-          apiVersion: '2024-12-18.acacia' as any,
+          apiVersion: '2025-02-24.acacia',
         });
-        console.log('✅ Stripe initialized with real API key');
+        console.log('✅ Stripe initialized with API version 2025-02-24.acacia');
       } catch (error) {
         console.error('❌ Failed to initialize Stripe:', error);
         this.stripe = null;
@@ -55,6 +55,12 @@ export class PaymentService {
     }
 
     try {
+      console.log('🔵 Creating Stripe checkout session:', {
+        productName: request.productName,
+        amount: request.amount,
+        userId: request.userId
+      });
+
       // Create Stripe Checkout Session
       const session = await this.stripe.checkout.sessions.create({
         payment_method_types: ['card'],
@@ -73,14 +79,21 @@ export class PaymentService {
           },
         ],
         mode: 'payment',
-        success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/checkout/cancel`,
+        success_url: `${process.env.API_URL || 'https://agentic-commerce-api-latest.onrender.com'}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.API_URL || 'https://agentic-commerce-api-latest.onrender.com'}/checkout/cancel`,
         metadata: {
           userId: request.userId,
           productId: request.productId,
+          productName: request.productName,
           merchant: request.merchant,
           category: request.category || '',
         },
+      });
+
+      console.log('✅ Stripe session created:', {
+        sessionId: session.id,
+        url: session.url,
+        status: session.status
       });
 
       return {
@@ -93,8 +106,14 @@ export class PaymentService {
         amount: request.amount,
         currency: 'USD',
       };
-    } catch (error) {
-      console.error('Error creating Stripe session:', error);
+    } catch (error: any) {
+      console.error('❌ Error creating Stripe session:', {
+        message: error.message,
+        type: error.type,
+        code: error.code,
+        statusCode: error.statusCode,
+        raw: error.raw
+      });
       // Fallback to mock if Stripe fails
       return this.getMockCheckoutResponse(request);
     }
