@@ -232,6 +232,52 @@ export class DB {
     this.db.prepare('DELETE FROM policies WHERE id = ?').run(id);
   }
 
+  /**
+   * Get all policies assigned to a user
+   */
+  async getUserPolicies(userId: string): Promise<Policy[]> {
+    const rows = this.db.prepare(`
+      SELECT p.* 
+      FROM policies p
+      INNER JOIN user_policies up ON p.id = up.policy_id
+      WHERE up.user_id = ?
+      ORDER BY p.priority DESC, p.created_at DESC
+    `).all(userId) as any[];
+
+    return rows.map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      type: row.type,
+      enabled: row.enabled === 1,
+      priority: row.priority,
+      conditions: JSON.parse(row.conditions || '{}'),
+      rules: JSON.parse(row.rules || '{}'),
+    }));
+  }
+
+  /**
+   * Assign a policy to a user
+   */
+  async assignPolicyToUser(userId: string, policyId: string): Promise<void> {
+    const id = `user-policy-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    const now = new Date().toISOString();
+    
+    this.db.prepare(`
+      INSERT INTO user_policies (id, user_id, policy_id, created_at)
+      VALUES (?, ?, ?, ?)
+    `).run(id, userId, policyId, now);
+  }
+
+  /**
+   * Remove a policy from a user
+   */
+  async removePolicyFromUser(userId: string, policyId: string): Promise<void> {
+    this.db.prepare(`
+      DELETE FROM user_policies 
+      WHERE user_id = ? AND policy_id = ?
+    `).run(userId, policyId);
+  }
+
   async getPurchaseHistory(userId?: string, limit: number = 50): Promise<any[]> {
     // Check if new columns exist
     let hasProductName = false;
@@ -593,6 +639,52 @@ export class DB {
   }
 
   /**
+   * Get purchase by ID
+   */
+  async getPurchaseById(purchaseId: number): Promise<any | null> {
+    const row = this.db.prepare(`
+      SELECT 
+        id,
+        user_id,
+        product_id,
+        product_name,
+        amount,
+        merchant,
+        category,
+        allowed,
+        requires_approval,
+        approval_status,
+        policy_results,
+        timestamp,
+        checkout_method,
+        product_url,
+        product_image_url
+      FROM purchase_attempts
+      WHERE id = ?
+    `).get(purchaseId) as any;
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      userId: row.user_id,
+      productId: row.product_id,
+      productName: row.product_name || row.product_id,
+      amount: row.amount,
+      merchant: row.merchant,
+      category: row.category,
+      allowed: row.allowed === 1,
+      requiresApproval: row.requires_approval === 1,
+      approval_status: row.approval_status,
+      policyResults: JSON.parse(row.policy_results || '[]'),
+      timestamp: row.timestamp,
+      checkoutMethod: row.checkout_method,
+      productUrl: row.product_url,
+      productImageUrl: row.product_image_url
+    };
+  }
+
+  /**
    * Approve a purchase that requires approval
    */
   async approvePurchase(purchaseId: number): Promise<void> {
@@ -653,26 +745,26 @@ export class DB {
     const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
 
-    // Current month stats
+    // Current month stats - properly handle approval_status
     const currentQuery = userId 
       ? `SELECT 
           COALESCE(SUM(amount), 0) as total_spend,
-          COALESCE(SUM(CASE WHEN allowed = 1 THEN amount ELSE 0 END), 0) as in_policy_spend,
-          COALESCE(SUM(CASE WHEN allowed = 0 THEN amount ELSE 0 END), 0) as out_policy_spend,
+          COALESCE(SUM(CASE WHEN allowed = 1 OR approval_status = 'approved' THEN amount ELSE 0 END), 0) as in_policy_spend,
+          COALESCE(SUM(CASE WHEN allowed = 0 AND (approval_status IS NULL OR approval_status != 'approved') THEN amount ELSE 0 END), 0) as out_policy_spend,
           COUNT(*) as total_transactions,
-          SUM(CASE WHEN allowed = 1 THEN 1 ELSE 0 END) as approved_transactions,
-          SUM(CASE WHEN allowed = 0 AND requires_approval = 0 THEN 1 ELSE 0 END) as denied_transactions,
-          SUM(CASE WHEN requires_approval = 1 THEN 1 ELSE 0 END) as pending_approvals
+          SUM(CASE WHEN approval_status = 'approved' OR (allowed = 1 AND requires_approval = 0) THEN 1 ELSE 0 END) as approved_transactions,
+          SUM(CASE WHEN approval_status = 'rejected' OR (allowed = 0 AND requires_approval = 0) THEN 1 ELSE 0 END) as denied_transactions,
+          SUM(CASE WHEN requires_approval = 1 AND (approval_status IS NULL OR approval_status = 'pending') THEN 1 ELSE 0 END) as pending_approvals
         FROM purchase_attempts 
         WHERE user_id = ? AND timestamp >= ?`
       : `SELECT 
           COALESCE(SUM(amount), 0) as total_spend,
-          COALESCE(SUM(CASE WHEN allowed = 1 THEN amount ELSE 0 END), 0) as in_policy_spend,
-          COALESCE(SUM(CASE WHEN allowed = 0 THEN amount ELSE 0 END), 0) as out_policy_spend,
+          COALESCE(SUM(CASE WHEN allowed = 1 OR approval_status = 'approved' THEN amount ELSE 0 END), 0) as in_policy_spend,
+          COALESCE(SUM(CASE WHEN allowed = 0 AND (approval_status IS NULL OR approval_status != 'approved') THEN amount ELSE 0 END), 0) as out_policy_spend,
           COUNT(*) as total_transactions,
-          SUM(CASE WHEN allowed = 1 THEN 1 ELSE 0 END) as approved_transactions,
-          SUM(CASE WHEN allowed = 0 AND requires_approval = 0 THEN 1 ELSE 0 END) as denied_transactions,
-          SUM(CASE WHEN requires_approval = 1 THEN 1 ELSE 0 END) as pending_approvals
+          SUM(CASE WHEN approval_status = 'approved' OR (allowed = 1 AND requires_approval = 0) THEN 1 ELSE 0 END) as approved_transactions,
+          SUM(CASE WHEN approval_status = 'rejected' OR (allowed = 0 AND requires_approval = 0) THEN 1 ELSE 0 END) as denied_transactions,
+          SUM(CASE WHEN requires_approval = 1 AND (approval_status IS NULL OR approval_status = 'pending') THEN 1 ELSE 0 END) as pending_approvals
         FROM purchase_attempts 
         WHERE timestamp >= ?`;
 
