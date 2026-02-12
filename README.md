@@ -13,12 +13,12 @@ A complete ChatGPT-powered shopping assistant with policy enforcement, product s
 - 🔒 **JWT Authentication** - Secure API access
 - 📊 **SQLite Database** - Lightweight and portable
 
-## 🚀 Quick Start (5 Minutes)
+## 🚀 Quick Start: GPT Agent + Docker Backend
 
 ### Prerequisites
 
 - **Docker Desktop** installed and running ([Install Guide](./DOCKER_SETUP.md))
-- **ChatGPT Plus** subscription (for creating custom GPTs)
+- **ChatGPT Plus** subscription (for creating a custom GPT that calls this API)
 
 ### Option 1: Automated Setup (Recommended)
 
@@ -31,13 +31,13 @@ cd /Users/cyrus19901/Repository/agentic-commerce
 
 This will:
 - ✅ Check Docker installation
-- 📝 Create .env file
+- 📝 Create `.env` file
 - 🔨 Build Docker images
-- 🚀 Start containers
-- 📦 Setup database
-- 🔑 Generate JWT token
+- 🚀 Start the backend in Docker (`api` on `http://localhost:3000`)
+- 📦 Setup SQLite database in `./data`
+- 🔑 Generate a **JWT token** for the GPT to use
 
-**Copy the JWT token** from the output - you'll need it for ChatGPT!
+**Copy the JWT token** from the output – this is what your GPT will send in the `Authorization` header.
 
 ### Option 2: Manual Setup
 
@@ -92,13 +92,29 @@ Once started, you'll have:
 - **Health Check**: http://localhost:3000/health
 - **DB Viewer**: http://localhost:8080
 
-### Configure ChatGPT GPT
+### How the GPT Talks to the Docker Backend
 
-1. Go to https://chat.openai.com/gpts/editor
-2. Click **Create a GPT**
-3. Follow the detailed instructions in [`docs/chatgpt-gpt-config.md`](./docs/chatgpt-gpt-config.md)
-4. Add your JWT token to the authentication settings
-5. Use `http://localhost:3000` as the API URL (or your deployed URL)
+At a high level:
+
+1. **Docker** runs the Express API on `http://localhost:3000` (inside your machine).
+2. Your **custom GPT** is configured with an **OpenAPI schema** that describes the API (search, policy check, checkout, etc.).
+3. The GPT uses **actions** (e.g. `searchProducts`, `checkPolicy`) that the OpenAI platform turns into HTTP requests to your Docker API.
+4. Each request includes `Authorization: Bearer <your-jwt>` so the backend can authenticate the GPT.
+
+### Configure the GPT (end‑to‑end)
+
+1. Go to `https://chat.openai.com/gpts/editor`.
+2. Click **Create a GPT**.
+3. In **Actions → Import schema**, paste the OpenAPI YAML from [`docs/chatgpt-gpt-config.md`](./docs/chatgpt-gpt-config.md).
+4. In **Authentication**:
+   - **Type**: API Key / Bearer
+   - **Header name**: `Authorization`
+   - **Value format**: `Bearer <your-jwt-token>`
+   - Use the token you generated via `make generate-token USER=user-123` (or the quick‑start script).
+5. In the OpenAPI `servers` section, set:
+   - `url: http://localhost:3000` for local testing.
+   - If ChatGPT cannot reach `localhost` directly, expose your Docker API via a tunnel (e.g. ngrok) and use that HTTPS URL instead.
+6. Save the GPT and start chatting – when it needs to search products or check policies, it will issue HTTP calls to your Dockerized backend.
 
 ### Test It!
 
