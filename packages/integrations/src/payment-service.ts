@@ -32,9 +32,9 @@ export class PaymentService {
     if (apiKey && (apiKey.startsWith('sk_test_') || apiKey.startsWith('sk_live_'))) {
       try {
         this.stripe = new Stripe(apiKey, {
-          apiVersion: '2025-02-24.acacia',
+          apiVersion: '2026-01-28.clover' as any, // Use latest API version
         });
-        console.log('✅ Stripe initialized with API version 2025-02-24.acacia');
+        console.log('✅ Stripe initialized with API version 2026-01-28.clover');
       } catch (error) {
         console.error('❌ Failed to initialize Stripe:', error);
         this.stripe = null;

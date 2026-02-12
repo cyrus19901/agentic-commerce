@@ -58,12 +58,175 @@ info:
     Always check policies BEFORE initiating checkout!
   version: 1.0.0
 servers:
-  - url: https://agentic-commerce-api-latest.onrender.com
-    description: Production server (Render deployment)
-  - url: http://localhost:3000
-    description: Local development server
+  - url: https://2ba9-71-212-131-94.ngrok-free.app
+    description: Local development server via ngrok tunnel
 
 paths:
+  # ============================================================================
+  # AGENT-TO-AGENT SERVICE ENDPOINTS
+  # ============================================================================
+  
+  /api/registry/agents:
+    get:
+      operationId: discoverAgents
+      summary: Discover available agents and their services
+      description: |
+        Find agents that offer specific services. Use this to discover what agents
+        are available before requesting their services.
+        
+        Example services: data-scraping, api-calls, computation, data-processing
+      parameters:
+        - name: service
+          in: query
+          schema:
+            type: string
+          description: Filter agents by service type (e.g., "data-scraping")
+        - name: user_email
+          in: query
+          required: true
+          schema:
+            type: string
+            format: email
+          description: User's email for authentication
+      responses:
+        '200':
+          description: List of available agents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        agentId:
+                          type: string
+                          example: "agent://seller-test/v1"
+                        name:
+                          type: string
+                        services:
+                          type: array
+                          items:
+                            type: string
+                        serviceDescription:
+                          type: string
+                        acceptedCurrencies:
+                          type: array
+                          items:
+                            type: string
+  
+  /api/agent/services/{serviceType}:
+    post:
+      operationId: requestAgentServiceDirect
+      summary: Request a service from another agent (Agent-to-Agent transaction)
+      description: Request agent service using x402 protocol. Returns 402 for payment, then executes service after payment proof submitted.
+      parameters:
+        - name: serviceType
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [data-scraping, api-calls, computation, data-processing]
+          description: Type of service to request
+          example: "data-scraping"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_email
+              properties:
+                user_email:
+                  type: string
+                  format: email
+                  description: User's email for authentication and policy checks
+                url:
+                  type: string
+                  description: For data-scraping - URL to scrape
+                extractFields:
+                  type: array
+                  items:
+                    type: string
+                  description: For data-scraping - Fields to extract
+              example:
+                user_email: "user@example.com"
+                url: "https://example.com"
+                extractFields: ["title", "description"]
+      responses:
+        '402':
+          description: Payment Required - USDC payment needed on Solana
+          headers:
+            PAYMENT-REQUIRED:
+              schema:
+                type: string
+              description: Base64url encoded x402 payment requirement
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "PAYMENT_REQUIRED"
+                  requirement:
+                    type: object
+                    description: Payment requirement details
+                    properties:
+                      protocol:
+                        type: string
+                        example: "x402"
+                      amount:
+                        type: string
+                        example: "1000000"
+                        description: Amount in lamports (1 USDC = 1,000,000 lamports)
+                      mint:
+                        type: string
+                        example: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                        description: USDC token mint address
+                      network:
+                        type: string
+                        example: "solana:devnet"
+                      payTo:
+                        type: string
+                        description: Seller's USDC token account
+        '200':
+          description: Service completed successfully (after payment verification)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  service:
+                    type: string
+                  data:
+                    type: object
+                  message:
+                    type: string
+        '403':
+          description: Policy violation - Transaction not allowed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  reason:
+                    type: string
+                  matchedPolicies:
+                    type: array
+
+  # ============================================================================
+  # TRADITIONAL SHOPPING ENDPOINTS
+  # ============================================================================
+  
+  /api/auth/create-user:
   /api/auth/create-user:
     post:
       operationId: createUser
@@ -477,6 +640,215 @@ paths:
                         type: number
                       status:
                         type: string
+
+  /api/chatgpt-agent/wallet:
+    post:
+      summary: Get or create Solana wallet for agent-to-agent payments
+      description: |
+        Creates and returns a Solana wallet for the user to enable agent-to-agent transactions.
+        The wallet is used to hold USDC for paying other agents.
+        Includes funding instructions for testnet/mainnet.
+      operationId: getChatGPTWallet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_email:
+                  type: string
+                  description: User's email address
+              required:
+                - user_email
+      responses:
+        '200':
+          description: Wallet information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  wallet:
+                    type: object
+                    properties:
+                      publicKey:
+                        type: string
+                        description: Solana public key
+                      tokenAccount:
+                        type: string
+                        description: USDC token account address
+                      network:
+                        type: string
+                        enum: [devnet, mainnet-beta]
+                      balances:
+                        type: object
+                        properties:
+                          sol:
+                            type: number
+                            description: SOL balance
+                          usdc:
+                            type: number
+                            description: USDC balance
+                      fundingInstructions:
+                        type: object
+                        properties:
+                          sol:
+                            type: string
+                          usdc:
+                            type: string
+
+  /api/chatgpt-agent/request-service:
+    post:
+      summary: Request a service from another agent (ChatGPT as buyer)
+      description: ChatGPT acts as buyer agent. Automatically handles payment flow, executes USDC payment on Solana, and returns service result.
+      operationId: requestAgentServiceAuto
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_email:
+                  type: string
+                  description: User's email address
+                agentId:
+                  type: string
+                  description: Agent ID to request service from (e.g., "agent://seller-test/v1")
+                serviceType:
+                  type: string
+                  description: Type of service to request
+                  enum:
+                    - data-scraping
+                    - api-calling
+                    - computation
+                serviceParams:
+                  type: object
+                  description: Service-specific parameters
+                  properties:
+                    url:
+                      type: string
+                      description: For data-scraping, the URL to scrape
+                    extractFields:
+                      type: array
+                      items:
+                        type: string
+                      description: Fields to extract from the page
+                    apiUrl:
+                      type: string
+                      description: For api-calling, the API URL to call
+                    method:
+                      type: string
+                      description: HTTP method (GET, POST, etc.)
+                    payload:
+                      type: object
+                      description: Request payload for API call
+              required:
+                - user_email
+                - agentId
+                - serviceType
+      responses:
+        '200':
+          description: Service completed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  service:
+                    type: string
+                    description: Service type that was executed
+                  agent:
+                    type: string
+                    description: Agent ID that provided the service
+                  payment:
+                    type: object
+                    properties:
+                      amount:
+                        type: number
+                        description: Amount paid in USDC
+                      currency:
+                        type: string
+                        enum: [USDC]
+                      txSignature:
+                        type: string
+                        description: Solana transaction signature
+                      explorerUrl:
+                        type: string
+                        description: Link to view transaction on Solana explorer
+                  result:
+                    type: object
+                    description: Service-specific result data
+        '400':
+          description: Bad request (missing fields, no wallet, etc.)
+        '402':
+          description: Payment required (should not happen as payment is automatic)
+        '404':
+          description: User or agent not found
+        '500':
+          description: Service request error
+
+  /api/registry/agents:
+    get:
+      summary: List all registered agents
+      description: |
+        Discover available agents in the registry.
+        Use this to find agents that ChatGPT can interact with for agent-to-agent transactions.
+      operationId: listAgents
+      parameters:
+        - name: serviceType
+          in: query
+          schema:
+            type: string
+          description: Filter by service type
+        - name: verified
+          in: query
+          schema:
+            type: boolean
+          description: Filter by verification status
+      responses:
+        '200':
+          description: List of registered agents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        agentId:
+                          type: string
+                          description: Unique agent identifier
+                        name:
+                          type: string
+                        description:
+                          type: string
+                        serviceType:
+                          type: string
+                          description: Type of service offered
+                        pricing:
+                          type: object
+                          properties:
+                            basePrice:
+                              type: number
+                              description: Base price in USDC
+                        capabilities:
+                          type: array
+                          items:
+                            type: string
+                        endpoint:
+                          type: string
+                          description: Agent API endpoint
+                        active:
+                          type: boolean
+                        verified:
+                          type: boolean
 
 components:
   schemas: {}

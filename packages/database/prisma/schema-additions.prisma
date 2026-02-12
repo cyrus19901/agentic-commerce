@@ -1,0 +1,63 @@
+// NEW Models for Agent-to-Agent Support
+// Add these to the main schema.prisma file after the Purchase model
+
+// Agent Registry - for discovering agents and their services
+model RegisteredAgent {
+  id        String   @id @default(cuid())
+  agentId   String   @unique // e.g., "agent://seller.scraper/v1"
+  name      String
+  baseUrl   String
+  
+  // Services and capabilities
+  services           String[] // List of services offered
+  serviceDescription String?
+  
+  // Payment details
+  acceptedCurrencies String[] @default(["USDC"])
+  usdcTokenAccount   String? // Solana USDC ATA for receiving payments
+  solanaPubkey       String? // Agent's Solana public key
+  
+  // Status
+  active    Boolean  @default(true)
+  verified  Boolean  @default(false) // Admin verification status
+  
+  // Metadata
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relationships
+  ownerId String // User who registered this agent
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+  @@index([active, verified])
+}
+
+// x402 Nonce tracking for anti-replay protection
+model X402Nonce {
+  id        String   @id @default(cuid())
+  nonce     String   @unique
+  
+  // Associated transaction
+  txSignature     String
+  agentId         String // Seller agent that used this nonce
+  buyerUserId     String? // Buyer user if known
+  amount          String // Amount in base units
+  mint            String // Token mint address
+  
+  // Validation
+  verified        Boolean  @default(false)
+  verifiedAt      DateTime?
+  
+  // Expiry
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([nonce])
+  @@index([txSignature])
+  @@index([expiresAt])
+}
+
+// Add to User model relationships:
+// registeredAgents RegisteredAgent[]

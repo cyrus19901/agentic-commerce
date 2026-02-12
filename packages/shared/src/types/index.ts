@@ -12,12 +12,16 @@ export interface Product {
   inStock: boolean;
 }
 
+export type TransactionType = 'agent-to-merchant' | 'agent-to-agent' | 'all';
+
 export interface Policy {
   id: string;
   name: string;
   type: 'budget' | 'transaction' | 'merchant' | 'category' | 'time' | 'agent' | 'purpose' | 'composite';
   enabled: boolean;
   priority: number;
+  // NEW: Transaction type scoping - which transaction types this policy applies to
+  transactionTypes?: TransactionType[];
   conditions: {
     users?: string[];
     departments?: string[];
@@ -74,6 +78,8 @@ export interface PurchaseRequest {
   price: number;
   merchant: string;
   category?: string;
+  // NEW: Transaction type
+  transactionType?: TransactionType;
   // Additional fields for policy conditions
   agentName?: string;
   agentType?: string;
@@ -81,4 +87,67 @@ export interface PurchaseRequest {
   dayOfWeek?: number; // 0-6, Sunday = 0
   recipientAgent?: string;
   purpose?: string;
+  // NEW: Agent-to-agent specific fields
+  buyerAgentId?: string;
+  recipientAgentId?: string;
+  serviceType?: string;
+}
+
+// NEW: Agent Registry Types
+export interface RegisteredAgent {
+  id: string;
+  agentId: string; // e.g., "agent://seller.scraper/v1"
+  name: string;
+  baseUrl: string;
+  services: string[];
+  serviceDescription?: string;
+  acceptedCurrencies: string[];
+  usdcTokenAccount?: string;
+  solanaPubkey?: string;
+  active: boolean;
+  verified: boolean;
+  ownerId: string;
+  metadata?: any;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// NEW: x402 Protocol Types
+export interface X402Requirement {
+  protocol: 'x402';
+  version: 'v2';
+  scheme: 'exact';
+  network: string; // e.g., "solana:devnet"
+  mint: string; // USDC mint address
+  amount: string; // Amount in base units (lamports for USDC)
+  payTo: string; // Seller's USDC token account
+  nonce: string; // Unique nonce for anti-replay
+  expiresAt: number; // Unix timestamp
+  resource: {
+    method: string;
+    path: string;
+    bodyHash: string; // SHA-256 hash of request body
+  };
+  facilitator: string; // Facilitator verification URL
+}
+
+export interface X402PaymentProof {
+  txSignature: string; // Solana transaction signature
+  nonce: string;
+  bodyHash: string;
+  payTo: string;
+  amount: string;
+  mint: string;
+  network: string;
+}
+
+export interface X402Receipt {
+  ok: true;
+  txSignature: string;
+  amount: string;
+  mint: string;
+  payTo: string;
+  nonce: string;
+  verifiedAt: number;
+  buyer?: string;
 }
