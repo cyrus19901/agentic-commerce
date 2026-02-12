@@ -51,11 +51,28 @@ export class DB {
         type TEXT NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 1,
         priority INTEGER NOT NULL DEFAULT 0,
+        transaction_types TEXT NOT NULL DEFAULT '["agent-to-merchant"]',
         conditions TEXT NOT NULL,
         rules TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS products (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        price REAL NOT NULL,
+        description TEXT,
+        merchant TEXT NOT NULL,
+        category TEXT NOT NULL,
+        image_url TEXT,
+        available INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_products_merchant ON products(merchant);
+      CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
 
       CREATE TABLE IF NOT EXISTS purchase_attempts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,20 +94,66 @@ export class DB {
       
       CREATE INDEX IF NOT EXISTS idx_users_email 
         ON users(email);
+
+      -- NEW: x402 Nonce tracking for anti-replay
+      CREATE TABLE IF NOT EXISTS x402_nonces (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nonce TEXT UNIQUE NOT NULL,
+        tx_signature TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        buyer_user_id TEXT,
+        amount TEXT NOT NULL,
+        mint TEXT NOT NULL,
+        verified INTEGER NOT NULL DEFAULT 0,
+        verified_at TEXT,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_nonce ON x402_nonces(nonce);
+      CREATE INDEX IF NOT EXISTS idx_tx_signature ON x402_nonces(tx_signature);
+      CREATE INDEX IF NOT EXISTS idx_expires_at ON x402_nonces(expires_at);
+
+      -- NEW: Agent Registry
+      CREATE TABLE IF NOT EXISTS registered_agents (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        base_url TEXT NOT NULL,
+        services TEXT NOT NULL,
+        service_description TEXT,
+        accepted_currencies TEXT NOT NULL,
+        usdc_token_account TEXT,
+        solana_pubkey TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        verified INTEGER NOT NULL DEFAULT 0,
+        owner_id TEXT NOT NULL,
+        metadata TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_agent_id ON registered_agents(agent_id);
+      CREATE INDEX IF NOT EXISTS idx_agent_active ON registered_agents(active, verified);
     `);
   }
 
   async getActivePolicies(userId?: string): Promise<Policy[]> {
+    console.log('🔍 DB.getActivePolicies called for userId:', userId);
     const rows = this.db.prepare('SELECT * FROM policies WHERE enabled = 1 ORDER BY priority DESC').all();
-    return rows.map((row: any) => ({
+    console.log(`🔍 DB.getActivePolicies: Found ${rows.length} enabled policies in database`);
+    const mapped = rows.map((row: any) => ({
       id: row.id,
       name: row.name,
       type: row.type,
       enabled: row.enabled === 1,
       priority: row.priority,
+      transactionTypes: row.transaction_types ? JSON.parse(row.transaction_types) : ['agent-to-merchant'],
       conditions: JSON.parse(row.conditions),
       rules: JSON.parse(row.rules),
     }));
+    console.log(`🔍 DB.getActivePolicies: Returning ${mapped.length} policies`);
+    return mapped;
   }
 
   async getUserSpending(userId: string, period: 'daily' | 'weekly' | 'monthly'): Promise<number> {
@@ -855,6 +918,290 @@ export class DB {
       successRate: Math.round(successRate * 10) / 10,
       impactedSpend: stats.impacted_spend || 0,
     };
+  }
+
+  // ============================================================================
+  // x402 Nonce Management (Anti-Replay Protection)
+  // ============================================================================
+
+  /**
+   * Check if an x402 nonce has already been used
+   */
+  async checkX402Nonce(nonce: string): Promise<boolean> {
+    const result = this.db.prepare('SELECT id FROM x402_nonces WHERE nonce = ?').get(nonce);
+    return !!result;
+  }
+
+  /**
+   * Store x402 nonce after verification
+   */
+  async storeX402Nonce(params: {
+    nonce: string;
+    txSignature: string;
+    agentId: string;
+    buyerUserId?: string;
+    amount: string;
+    mint: string;
+    verified: boolean;
+    verifiedAt: Date;
+    expiresAt: Date;
+  }): Promise<void> {
+    this.db.prepare(`
+      INSERT INTO x402_nonces (
+        nonce, tx_signature, agent_id, buyer_user_id, amount, mint,
+        verified, verified_at, expires_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      params.nonce,
+      params.txSignature,
+      params.agentId,
+      params.buyerUserId || null,
+      params.amount,
+      params.mint,
+      params.verified ? 1 : 0,
+      params.verifiedAt.toISOString(),
+      params.expiresAt.toISOString(),
+      new Date().toISOString()
+    );
+  }
+
+  /**
+   * Clean up expired nonces (should run periodically)
+   */
+  async cleanupExpiredNonces(): Promise<number> {
+    const now = new Date().toISOString();
+    const result = this.db.prepare('DELETE FROM x402_nonces WHERE expires_at < ?').run(now);
+    return result.changes;
+  }
+
+  // ============================================================================
+  // Agent Registry Management
+  // ============================================================================
+
+  /**
+   * Register a new agent
+   */
+  async registerAgent(params: {
+    id: string;
+    agentId: string;
+    name: string;
+    baseUrl: string;
+    services: string[];
+    serviceDescription?: string;
+    acceptedCurrencies: string[];
+    usdcTokenAccount?: string;
+    solanaPubkey?: string;
+    ownerId: string;
+    metadata?: any;
+  }): Promise<void> {
+    const now = new Date().toISOString();
+    
+    this.db.prepare(`
+      INSERT INTO registered_agents (
+        id, agent_id, name, base_url, services, service_description,
+        accepted_currencies, usdc_token_account, solana_pubkey,
+        active, verified, owner_id, metadata, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?)
+    `).run(
+      params.id,
+      params.agentId,
+      params.name,
+      params.baseUrl,
+      JSON.stringify(params.services),
+      params.serviceDescription || null,
+      JSON.stringify(params.acceptedCurrencies),
+      params.usdcTokenAccount || null,
+      params.solanaPubkey || null,
+      params.ownerId,
+      params.metadata ? JSON.stringify(params.metadata) : null,
+      now,
+      now
+    );
+  }
+
+  /**
+   * Get registered agent by agent ID
+   */
+  async getRegisteredAgent(agentId: string): Promise<any | null> {
+    const row = this.db.prepare('SELECT * FROM registered_agents WHERE agent_id = ?').get(agentId);
+    
+    if (!row) return null;
+    
+    return {
+      id: row.id,
+      agentId: row.agent_id,
+      name: row.name,
+      baseUrl: row.base_url,
+      services: JSON.parse(row.services),
+      serviceDescription: row.service_description,
+      acceptedCurrencies: JSON.parse(row.accepted_currencies),
+      usdcTokenAccount: row.usdc_token_account,
+      solanaPubkey: row.solana_pubkey,
+      active: row.active === 1,
+      verified: row.verified === 1,
+      ownerId: row.owner_id,
+      metadata: row.metadata ? JSON.parse(row.metadata) : null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /**
+   * List all active registered agents
+   */
+  async listRegisteredAgents(filters?: {
+    active?: boolean;
+    verified?: boolean;
+    ownerId?: string;
+  }): Promise<any[]> {
+    let query = 'SELECT * FROM registered_agents WHERE 1=1';
+    const params: any[] = [];
+    
+    if (filters?.active !== undefined) {
+      query += ' AND active = ?';
+      params.push(filters.active ? 1 : 0);
+    }
+    
+    if (filters?.verified !== undefined) {
+      query += ' AND verified = ?';
+      params.push(filters.verified ? 1 : 0);
+    }
+    
+    if (filters?.ownerId) {
+      query += ' AND owner_id = ?';
+      params.push(filters.ownerId);
+    }
+    
+    query += ' ORDER BY created_at DESC';
+    
+    const rows = this.db.prepare(query).all(...params);
+    
+    return rows.map((row: any) => ({
+      id: row.id,
+      agentId: row.agent_id,
+      name: row.name,
+      baseUrl: row.base_url,
+      services: JSON.parse(row.services),
+      serviceDescription: row.service_description,
+      acceptedCurrencies: JSON.parse(row.accepted_currencies),
+      usdcTokenAccount: row.usdc_token_account,
+      solanaPubkey: row.solana_pubkey,
+      active: row.active === 1,
+      verified: row.verified === 1,
+      ownerId: row.owner_id,
+      metadata: row.metadata ? JSON.parse(row.metadata) : null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  /**
+   * Update registered agent
+   */
+  async updateRegisteredAgent(agentId: string, updates: {
+    name?: string;
+    baseUrl?: string;
+    services?: string[];
+    serviceDescription?: string;
+    usdcTokenAccount?: string;
+    solanaPubkey?: string;
+    active?: boolean;
+    verified?: boolean;
+  }): Promise<void> {
+    const fields: string[] = [];
+    const values: any[] = [];
+    
+    if (updates.name !== undefined) {
+      fields.push('name = ?');
+      values.push(updates.name);
+    }
+    
+    if (updates.baseUrl !== undefined) {
+      fields.push('base_url = ?');
+      values.push(updates.baseUrl);
+    }
+    
+    if (updates.services !== undefined) {
+      fields.push('services = ?');
+      values.push(JSON.stringify(updates.services));
+    }
+    
+    if (updates.serviceDescription !== undefined) {
+      fields.push('service_description = ?');
+      values.push(updates.serviceDescription);
+    }
+    
+    if (updates.usdcTokenAccount !== undefined) {
+      fields.push('usdc_token_account = ?');
+      values.push(updates.usdcTokenAccount);
+    }
+    
+    if (updates.solanaPubkey !== undefined) {
+      fields.push('solana_pubkey = ?');
+      values.push(updates.solanaPubkey);
+    }
+    
+    if (updates.active !== undefined) {
+      fields.push('active = ?');
+      values.push(updates.active ? 1 : 0);
+    }
+    
+    if (updates.verified !== undefined) {
+      fields.push('verified = ?');
+      values.push(updates.verified ? 1 : 0);
+    }
+    
+    if (fields.length === 0) return;
+    
+    fields.push('updated_at = ?');
+    values.push(new Date().toISOString());
+    
+    values.push(agentId);
+    
+    const query = `UPDATE registered_agents SET ${fields.join(', ')} WHERE agent_id = ?`;
+    this.db.prepare(query).run(...values);
+  }
+
+  /**
+   * Delete registered agent
+   */
+  async deleteRegisteredAgent(agentId: string): Promise<void> {
+    this.db.prepare('DELETE FROM registered_agents WHERE agent_id = ?').run(agentId);
+  }
+
+  // ============================================================================
+  // User Wallet Methods
+  // ============================================================================
+
+  async getUserWallet(userId: string): Promise<{ userId: string; publicKey: string; secretKey: number[] } | null> {
+    const row = this.db.prepare('SELECT * FROM user_wallets WHERE user_id = ?').get(userId) as any;
+    if (!row) return null;
+
+    // Decrypt the secret key (simple base64 for now - use proper encryption in production)
+    const secretKey = JSON.parse(Buffer.from(row.encrypted_secret, 'base64').toString('utf-8'));
+    
+    return {
+      userId: row.user_id,
+      publicKey: row.public_key,
+      secretKey,
+    };
+  }
+
+  async saveUserWallet(wallet: { userId: string; publicKey: string; secretKey: number[] }): Promise<void> {
+    // Encrypt the secret key (simple base64 for now - use proper encryption in production)
+    const encryptedSecret = Buffer.from(JSON.stringify(wallet.secretKey)).toString('base64');
+    
+    const id = `wallet_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    this.db.prepare(`
+      INSERT INTO user_wallets (id, user_id, public_key, encrypted_secret, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      id,
+      wallet.userId,
+      wallet.publicKey,
+      encryptedSecret,
+      new Date().toISOString()
+    );
   }
 }
 

@@ -1,60 +1,45 @@
-# Docker Compose file for production
-
 services:
   api:
+    image: agentic-commerce:dev
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: agentic-commerce-api
+      dockerfile: Dockerfile.dev
     ports:
       - "3000:3000"
-    environment:
-      - NODE_ENV=development
-      - PORT=3000
-      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
-      - DATABASE_URL=/app/data/shopping.db
-      - ALLOWED_ORIGINS=https://chat.openai.com,https://chatgpt.com
     volumes:
       # Mount data directory for persistent database
       - ./data:/app/data
-      # Mount source for development (optional - comment out for production)
-      - ./packages/api/src:/app/packages/api/src
-      - ./packages/core/src:/app/packages/core/src
-      - ./packages/database/src:/app/packages/database/src
-      - ./packages/integrations/src:/app/packages/integrations/src
-      - ./packages/shared/src:/app/packages/shared/src
-    restart: unless-stopped
-    networks:
-      - agentic-commerce-network
+    # Ensure entrypoint runs
+    entrypoint: ["/bin/sh", "/docker-entrypoint.sh"]
+    command: ["npm", "run", "dev"]
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - DATABASE_PATH=./data/shopping.db
+      - DATABASE_URL=/app/data/shopping.db
+      # Solana: devnet only (set SOLANA_CLUSTER=mainnet-beta for mainnet)
+      - SOLANA_CLUSTER=devnet
+      - SOLANA_RPC_DEVNET=${SOLANA_RPC_DEVNET:-https://solana-devnet.g.alchemy.com/v2/ZJmVXF-LVxv651ws9azjqBr6Upv_l9_5}
+      - SOLANA_RPC_MAINNET=https://api.mainnet-beta.solana.com
+      - USDC_MINT_DEVNET=Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr
+      - USDC_MINT_MAINNET=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+      # Agent configuration - using seller test account
+      - AGENT_ID=agent://platform-agent/v1
+      - USDC_TOKEN_ACCOUNT=Aj3Z8i5HQ1z9poYBfCicYXHCtfzry9ijcQyunPTaoG4g
+      - SOLANA_PUBKEY=2ZqWhcwYPqXKdtyCHSazqwp1F1ducfKvxLAbz95A8jkk
+      # Facilitator configuration
+      - FACILITATOR_URL=http://localhost:3000/api/facilitator
+      - FACILITATOR_SECRET=test-facilitator-secret
+      # Stripe (optional, for real payments)
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 3s
       retries: 3
       start_period: 40s
-
-  # Optional: Add a database viewer
-  db-viewer:
-    image: coleifer/sqlite-web:latest
-    container_name: agentic-commerce-db-viewer
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./data:/data
-    environment:
-      - SQLITE_DATABASE=/data/shopping.db
-    depends_on:
-      - api
-    networks:
-      - agentic-commerce-network
-    profiles:
-      - tools
-
-networks:
-  agentic-commerce-network:
-    driver: bridge
+    restart: unless-stopped
 
 volumes:
   data:
     driver: local
-

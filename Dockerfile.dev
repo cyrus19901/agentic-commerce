@@ -1,31 +1,54 @@
-# Development Dockerfile with hot reload
+# Development Dockerfile for Agentic Commerce
+# Uses Node 20 LTS to avoid native module compilation issues
 FROM node:20-alpine
 
 # Install build dependencies for native modules
-RUN apk add --no-cache python3 make g++ sqlite
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    sqlite
 
+# Set working directory
 WORKDIR /app
 
-# Copy package files first for better caching
+# Copy package files
 COPY package*.json ./
-COPY packages/shared/package.json ./packages/shared/
-COPY packages/database/package.json ./packages/database/
-COPY packages/integrations/package.json ./packages/integrations/
-COPY packages/core/package.json ./packages/core/
-COPY packages/api/package.json ./packages/api/
+COPY packages/api/package*.json ./packages/api/
+COPY packages/core/package*.json ./packages/core/
+COPY packages/database/package*.json ./packages/database/
+COPY packages/integrations/package*.json ./packages/integrations/
+COPY packages/shared/package*.json ./packages/shared/
 
-# Install all dependencies including dev dependencies
+# Install dependencies
 RUN npm install
 
 # Copy source code
 COPY . .
 
+# Build all packages
+RUN npm run build
+
 # Create data directory
 RUN mkdir -p /app/data
 
-# Expose port
+# Initialize database and seed with test data
+RUN npm run db:setup && \
+    node -r tsx/register scripts/seed-database.ts || echo "Seeding will run on startup"
+
+# Expose API port
 EXPOSE 3000
 
-# Start with dev command (hot reload)
-CMD ["npm", "run", "dev"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=40s \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
 
+# Startup script
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+# Set entrypoint
+ENTRYPOINT ["/bin/sh", "/docker-entrypoint.sh"]
+
+# Default command
+CMD ["npm", "run", "dev"]

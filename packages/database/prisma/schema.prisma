@@ -39,6 +39,12 @@ enum PurchaseStatus {
   FAILED
 }
 
+enum TransactionType {
+  AGENT_TO_MERCHANT
+  AGENT_TO_AGENT
+  ALL
+}
+
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
@@ -48,8 +54,9 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  policies  UserPolicy[]
-  purchases Purchase[]
+  policies         UserPolicy[]
+  purchases        Purchase[]
+  registeredAgents RegisteredAgent[] // NEW: Agents owned by this user
 
   @@index([email])
 }
@@ -64,6 +71,9 @@ model Policy {
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
+  // NEW: Transaction type scoping - which transaction types this policy applies to
+  transactionTypes TransactionType[] @default([AGENT_TO_MERCHANT])
+
   // Budget/Transaction limits
   amount     Float?
   periodType PeriodType?
@@ -76,6 +86,12 @@ model Policy {
   startTime  String? // HH:MM format
   endTime    String? // HH:MM format
   daysOfWeek Int[] // 0-6, Sunday = 0
+
+  // NEW: Agent-specific rules (for agent-to-agent transactions)
+  allowedAgentNames      String[] @default([])
+  blockedAgentNames      String[] @default([])
+  allowedRecipientAgents String[] @default([])
+  blockedRecipientAgents String[] @default([])
 
   users UserPolicy[]
 
@@ -103,21 +119,35 @@ model Purchase {
   productName     String
   productUrl      String?
   productImageUrl String?
-  merchant        String
+  merchant        String // For merchant transactions OR agent ID for agent-to-agent
   category        String?
   amount          Float
   currency        String         @default("USD")
   status          PurchaseStatus @default(PENDING)
 
+  // NEW: Transaction type
+  transactionType TransactionType @default(AGENT_TO_MERCHANT)
+
   // Policy validation
   policyCheckPassed Boolean  @default(false)
   policyViolations  String[] // Array of policy violation messages
 
-  // Payment details
+  // Stripe payment details (for agent-to-merchant)
   stripeSessionId String?
   stripePaymentId String?
   invoiceUrl      String?
 
+  // NEW: Solana/x402 payment details (for agent-to-agent)
+  solanaSignature     String? // Transaction signature on Solana
+  solanaMint          String? // USDC mint address
+  x402Nonce           String? @unique // Anti-replay nonce
+  facilitatorReceipt  Json? // Full receipt from facilitator
+  
+  // NEW: Agent-to-Agent specific fields
+  recipientAgentId String? // Agent that received the payment
+  buyerAgentId     String? // Agent that sent the payment
+  agentServiceType String? // Service type (e.g., "scraper", "api-call")
+  
   // Metadata
   metadata  Json?
   createdAt DateTime @default(now())
@@ -127,5 +157,65 @@ model Purchase {
 
   @@index([userId, status])
   @@index([createdAt])
+  @@index([transactionType])
+  @@index([solanaSignature])
+}
+
+// Agent Registry - for discovering agents and their services
+model RegisteredAgent {
+  id        String   @id @default(cuid())
+  agentId   String   @unique // e.g., "agent://seller.scraper/v1"
+  name      String
+  baseUrl   String
+  
+  // Services and capabilities
+  services           String[] // List of services offered
+  serviceDescription String?
+  
+  // Payment details
+  acceptedCurrencies String[] @default(["USDC"])
+  usdcTokenAccount   String? // Solana USDC ATA for receiving payments
+  solanaPubkey       String? // Agent's Solana public key
+  
+  // Status
+  active    Boolean  @default(true)
+  verified  Boolean  @default(false) // Admin verification status
+  
+  // Metadata
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relationships
+  ownerId String // User who registered this agent
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+  @@index([active, verified])
+}
+
+// x402 Nonce tracking for anti-replay protection
+model X402Nonce {
+  id        String   @id @default(cuid())
+  nonce     String   @unique
+  
+  // Associated transaction
+  txSignature     String
+  agentId         String // Seller agent that used this nonce
+  buyerUserId     String? // Buyer user if known
+  amount          String // Amount in base units
+  mint            String // Token mint address
+  
+  // Validation
+  verified        Boolean  @default(false)
+  verifiedAt      DateTime?
+  
+  // Expiry
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([nonce])
+  @@index([txSignature])
+  @@index([expiresAt])
 }
 

@@ -1,50 +1,27 @@
 #!/bin/sh
 set -e
 
-echo "🚀 Starting Agentic Commerce API..."
-echo "🔍 Current directory: $(pwd)"
-echo "🔍 Directory contents: $(ls -la)"
+echo "🐳 Docker container starting..."
 
-# Determine database path - use /data for production (Render mount), ./data for development
-if [ "$NODE_ENV" = "production" ]; then
-  DB_PATH="/data"
-  DB_FILE="/data/shopping.db"
+# Ensure data directory exists
+mkdir -p /app/data
+
+# Check if database exists, if not initialize it
+if [ ! -f /app/data/shopping.db ]; then
+    echo "📊 Database not found, initializing..."
+    npm run db:setup
+    
+    echo "🌱 Seeding database with test data..."
+    npx tsx scripts/seed-database.ts || echo "⚠️  Seeding skipped (will be populated on first use)"
 else
-  DB_PATH="/app/data"
-  DB_FILE="/app/data/shopping.db"
+    echo "✓ Database already exists"
 fi
 
-# Create data directory with proper permissions
-echo "📁 Creating data directory: $DB_PATH..."
-mkdir -p "$DB_PATH"
-chmod 777 "$DB_PATH"
-echo "✓ Data directory created: $DB_PATH"
-ls -la "$DB_PATH" || echo "⚠️  Cannot list data directory"
-
-# Initialize database if it doesn't exist
-if [ ! -f "$DB_FILE" ]; then
-  echo "📊 Initializing database at $DB_FILE..."
-  cd /app/packages/database
-  DATABASE_URL="$DB_FILE" node dist/setup.js || echo "⚠️  Database setup script not found, will create on first request"
-  cd /app
-else
-  echo "✓ Database already exists at $DB_FILE"
+# Link E2E buyer wallet to ChatGPT user so funded wallet is used (idempotent)
+if [ -f /app/scripts/link-e2e-buyer-wallet.ts ]; then
+    echo "🔗 Linking E2E buyer wallet for ChatGPT user..."
+    DATABASE_PATH=/app/data/shopping.db npx tsx scripts/link-e2e-buyer-wallet.ts 2>/dev/null || true
 fi
 
-# Print environment info
-echo "✅ Environment:"
-echo "   NODE_ENV: ${NODE_ENV:-development}"
-echo "   PORT: ${PORT:-3000}"
-echo "   DATABASE_URL: ${DATABASE_URL:-$DB_FILE}"
-echo "   Actual DB Path: $DB_FILE"
-echo "   JWT_SECRET: ${JWT_SECRET:+[SET]}"
-echo "   STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:+[SET]}"
-
-# Verify node and required files exist
-echo "🔍 Node version: $(node --version)"
-echo "🔍 API file exists: $(test -f /app/packages/api/dist/index.js && echo 'YES' || echo 'NO')"
-
-# Start the application
-echo "🎯 Starting API server from /app..."
-echo "📝 Command: node /app/packages/api/dist/index.js"
-exec node /app/packages/api/dist/index.js
+echo "🚀 Starting application..."
+exec "$@"

@@ -12,17 +12,40 @@ export class PolicyService {
     let requiresApproval = false;
     let flaggedForReview = false;
 
-    // If no policies, deny by default for safety
-    if (policies.length === 0) {
+    // Determine transaction type (default to agent-to-merchant for backwards compatibility)
+    const transactionType = request.transactionType || 'agent-to-merchant';
+
+    // Filter policies by transaction type
+    console.log(`🔍 PolicyService: Checking ${policies.length} policies for transaction type: ${transactionType}`);
+    policies.forEach(p => console.log(`  - Policy: ${p.name}, transactionTypes:`, p.transactionTypes));
+    
+    const applicablePolicies = policies.filter(policy => {
+      // If policy has no transactionTypes set, apply to all (backwards compatibility)
+      if (!policy.transactionTypes || policy.transactionTypes.length === 0) {
+        console.log(`  ✓ Policy ${policy.name}: No transactionTypes, applying to all`);
+        return true;
+      }
+      // Check if policy applies to this transaction type
+      const applies = policy.transactionTypes.includes(transactionType) || 
+             policy.transactionTypes.includes('all');
+      console.log(`  ${applies ? '✓' : '✗'} Policy ${policy.name}: ${applies ? 'APPLIES' : 'does not apply'}`);
+      return applies;
+    });
+
+    console.log(`🔍 PolicyService: Found ${applicablePolicies.length} applicable policies`);
+
+    // If no applicable policies, deny by default for safety
+    if (applicablePolicies.length === 0) {
+      console.log(`❌ PolicyService: No applicable policies found for ${transactionType}`);
       return {
         allowed: false,
-        reason: 'No policies configured',
+        reason: `No policies configured for ${transactionType} transactions`,
         matchedPolicies: [],
       };
     }
 
-    for (const policy of policies) {
-      const result = await this.checkPolicy(policy, request);
+    for (const policy of applicablePolicies) {
+      const result = await this.checkPolicy(policy, request, transactionType);
       matchedPolicies.push({
         id: policy.id,
         name: policy.name,
@@ -71,8 +94,103 @@ export class PolicyService {
     };
   }
 
-  private async checkPolicy(policy: Policy, request: PurchaseRequest) {
+  private async checkPolicy(policy: Policy, request: PurchaseRequest, transactionType: string) {
     let hasMatchingCondition = false;
+    
+    // Agent-to-agent specific validations
+    if (transactionType === 'agent-to-agent') {
+      // Check recipient agent restrictions
+      if (request.recipientAgentId) {
+        const recipientLower = request.recipientAgentId.toLowerCase();
+        
+        if (policy.rules.blockedRecipientAgents && policy.rules.blockedRecipientAgents.length > 0) {
+          hasMatchingCondition = true;
+          const isBlocked = policy.rules.blockedRecipientAgents.some(
+            (blocked) => blocked.toLowerCase() === recipientLower
+          );
+          if (isBlocked) {
+            return {
+              passed: false,
+              reason: `Recipient agent "${request.recipientAgentId}" is blocked`,
+            };
+          }
+        }
+        
+        if (policy.rules.allowedRecipientAgents && policy.rules.allowedRecipientAgents.length > 0) {
+          hasMatchingCondition = true;
+          const isAllowed = policy.rules.allowedRecipientAgents.some(
+            (allowed) => allowed.toLowerCase() === recipientLower
+          );
+          if (!isAllowed) {
+            return {
+              passed: false,
+              reason: `Recipient agent "${request.recipientAgentId}" is not in the allowed list`,
+            };
+          }
+        }
+      }
+      
+      // Check buyer agent restrictions
+      if (request.buyerAgentId) {
+        const buyerLower = request.buyerAgentId.toLowerCase();
+        
+        if (policy.rules.allowedAgentNames && policy.rules.allowedAgentNames.length > 0) {
+          hasMatchingCondition = true;
+          const isAllowed = policy.rules.allowedAgentNames.some(
+            (allowed) => allowed.toLowerCase() === buyerLower
+          );
+          if (!isAllowed) {
+            return {
+              passed: false,
+              reason: `Buyer agent "${request.buyerAgentId}" is not in the allowed list`,
+            };
+          }
+        }
+        
+        if (policy.rules.blockedAgentNames && policy.rules.blockedAgentNames.length > 0) {
+          hasMatchingCondition = true;
+          const isBlocked = policy.rules.blockedAgentNames.some(
+            (blocked) => blocked.toLowerCase() === buyerLower
+          );
+          if (isBlocked) {
+            return {
+              passed: false,
+              reason: `Buyer agent "${request.buyerAgentId}" is blocked`,
+            };
+          }
+        }
+      }
+      
+      // Check service type (category for agent-to-agent)
+      if (request.serviceType) {
+        hasMatchingCondition = true;
+        const serviceTypeLower = request.serviceType.toLowerCase();
+        
+        if (policy.rules.blockedCategories && policy.rules.blockedCategories.length > 0) {
+          const isBlocked = policy.rules.blockedCategories.some(
+            (blocked) => blocked.toLowerCase() === serviceTypeLower
+          );
+          if (isBlocked) {
+            return {
+              passed: false,
+              reason: `Service type "${request.serviceType}" is blocked`,
+            };
+          }
+        }
+        
+        if (policy.rules.allowedCategories && policy.rules.allowedCategories.length > 0) {
+          const isAllowed = policy.rules.allowedCategories.some(
+            (allowed) => allowed.toLowerCase() === serviceTypeLower
+          );
+          if (!isAllowed) {
+            return {
+              passed: false,
+              reason: `Service type "${request.serviceType}" is not in the allowed list`,
+            };
+          }
+        }
+      }
+    }
     
     // Budget check
     if (policy.type === 'budget') {

@@ -4,7 +4,11 @@ import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import { DB } from '@agentic-commerce/database';
 import { PolicyService } from '@agentic-commerce/core';
-import { EtsyClient, PaymentService, StripeAgentService } from '@agentic-commerce/integrations';
+import { EtsyClient, PaymentService, StripeAgentService, FacilitatorService } from '@agentic-commerce/integrations';
+import { createAgentRoutes } from './agent-routes';
+import { createRegistryRoutes } from './registry-routes';
+import { createFacilitatorRoutes } from './facilitator-routes';
+import { createChatGPTAgentRoutes } from './chatgpt-agent-routes';
 
 // Extend Express Request type to include user
 declare global {
@@ -31,6 +35,7 @@ const policyService = new PolicyService(db);
 const etsyClient = new EtsyClient();
 const paymentService = new PaymentService();
 const stripeAgentService = new StripeAgentService();
+const facilitatorService = new FacilitatorService(db);
 
 // Middleware - Allow all origins for ChatGPT and frontend
 app.use(cors({ 
@@ -683,6 +688,22 @@ app.post('/api/checkout/webhook', express.raw({ type: 'application/json' }), asy
     res.status(400).json({ error: error.message });
   }
 });
+
+// ============================================================================
+// NEW: Agent-to-Agent & Registry Routes
+// ============================================================================
+
+// Mount agent service routes (x402 protocol endpoints)
+app.use('/api/agent', authenticate, createAgentRoutes(db, policyService, facilitatorService));
+
+// Mount registry routes (agent discovery)
+app.use('/api/registry', createRegistryRoutes(db));
+
+// Mount facilitator routes (payment verification)
+app.use('/api/facilitator', createFacilitatorRoutes(facilitatorService));
+
+// Mount ChatGPT agent routes (simplified agent-to-agent for ChatGPT)
+app.use('/api/chatgpt-agent', createChatGPTAgentRoutes(db, policyService, facilitatorService));
 
 // Policy Management Endpoints
 app.get('/api/policies', authenticate, async (req, res) => {
