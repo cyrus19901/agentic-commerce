@@ -8,7 +8,7 @@
   "scripts": {
     "setup": "npm install && npm run build && npm run db:setup",
     "dev": "npm run dev --workspace=@agentic-commerce/api",
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build --workspace=@agentic-commerce/shared && npm run build --workspaces --if-present",
     "start": "npm run start --workspace=@agentic-commerce/api",
     "test": "npm run test --workspaces --if-present",
     "test:e2e:real": "npx tsx tests/e2e/agent-x402-real-solana.test.ts",

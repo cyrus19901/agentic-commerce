@@ -9,7 +9,7 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-const db = new DB('./data/shopping.db');
+const db = new DB(process.env.DATABASE_URL || './data/shopping.db');
 
 const defaultPolicies: Policy[] = [
   // ============================================
@@ -22,7 +22,9 @@ const defaultPolicies: Policy[] = [
     type: 'budget',
     enabled: true,
     priority: 100,
-    conditions: {},
+    conditions: {
+      transactionType: ['agent-to-merchant', 'agent-to-agent'],
+    },
     rules: { 
       maxAmount: 5000, 
       period: 'monthly',
@@ -36,7 +38,9 @@ const defaultPolicies: Policy[] = [
     type: 'transaction',
     enabled: true,
     priority: 95,
-    conditions: {},
+    conditions: {
+      transactionType: ['agent-to-merchant', 'agent-to-agent'],
+    },
     rules: { 
       maxTransactionAmount: 500,
       fallbackAction: 'deny',
@@ -103,9 +107,11 @@ const defaultPolicies: Policy[] = [
     type: 'category',
     enabled: true,
     priority: 70,
-    conditions: {},
+    conditions: {
+      transactionType: ['agent-to-merchant'],
+    },
     rules: {
-      allowedCategories: ['Office Supplies', 'Bags & Purses', 'Office & Business'],
+      allowedCategories: ['Office Supplies', 'Bags & Purses', 'Office & Business', 'Paper & Party Supplies'],
       fallbackAction: 'require_approval',
     },
   },
@@ -294,10 +300,12 @@ const defaultPolicies: Policy[] = [
     type: 'composite',
     enabled: true,
     priority: 5,
-    conditions: {},
+    conditions: {
+      transactionType: ['agent-to-merchant'],
+    },
     rules: {
       compositeConditions: [
-        { field: 'amount', operator: 'less_than_or_equal', value: 25 },
+        { field: 'amount', operator: 'less_than_or_equal', value: 100 },
         { field: 'category', operator: 'equals', value: 'Office Supplies' },
       ],
       fallbackAction: 'approve',
@@ -323,5 +331,22 @@ for (const policy of defaultPolicies) {
   }
 }
 
-console.log('✓ Database setup complete!');
+// Assign all policies to all existing users
+console.log('\n📋 Assigning policies to users...');
+const allUsers = db.db.prepare('SELECT id, email FROM users').all() as any[];
+console.log(`Found ${allUsers.length} users`);
+
+for (const user of allUsers) {
+  for (const policy of defaultPolicies) {
+    try {
+      db.db.prepare('INSERT OR IGNORE INTO user_policies (user_id, policy_id, active) VALUES (?, ?, 1)')
+        .run(user.id, policy.id);
+    } catch (e) {
+      // Ignore duplicate errors
+    }
+  }
+  console.log(`✓ Assigned ${defaultPolicies.length} policies to ${user.email}`);
+}
+
+console.log('\n✅ Database setup complete!');
 })();

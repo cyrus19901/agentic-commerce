@@ -1,43 +1,78 @@
-# 🛍️ Agentic Commerce - ChatGPT Shopping Assistant
+# 🛍️ Agentic Commerce - Unified Commerce Platform
 
-A complete ChatGPT-powered shopping assistant with policy enforcement, product search, and express checkout capabilities. Built with Express, TypeScript, and SQLite.
+**One ChatGPT. Two Commerce Modes. Zero Friction.**
 
-## ✨ Features
+A complete dual-mode commerce platform that seamlessly handles:
+- 🛒 **Agent-to-Merchant**: Buy products from stores via Stripe
+- 🤖 **Agent-to-Agent**: Request AI services via Solana/x402 USDC micropayments
 
-- 🤖 **ChatGPT Integration** - Natural conversation-based shopping
-- 🔍 **Product Search** - Search Etsy products (with mock data for testing)
-- 📋 **Policy Enforcement** - Automatic budget and transaction limit checking
-- 💰 **Spending Tracking** - Daily, weekly, and monthly spending reports
-- ⚡ **Express Checkout** - Quick purchase flow
-- 🐳 **Docker Ready** - Run anywhere with Docker
-- 🔒 **JWT Authentication** - Secure API access
-- 📊 **SQLite Database** - Lightweight and portable
+Built with Express, TypeScript, Solana, and unified policy enforcement.
 
-## 🚀 Quick Start (5 Minutes)
+## ✨ Key Features
 
-### Prerequisites
+### **Dual-Mode Commerce**
+- 🛍️ **Shopping (Stripe)**: Buy physical products from merchants
+- 🤖 **Services (Solana)**: Request data scraping, API calls, analytics from AI agents
+- 🎯 **Auto-Detection**: ChatGPT intelligently routes based on user intent
 
-- **Docker Desktop** installed and running ([Install Guide](./DOCKER_SETUP.md))
-- **ChatGPT Plus** subscription (for creating custom GPTs)
+### **Unified Policy Engine**
+- 📋 **Single Policy System**: Same policies enforce both transaction types
+- 💰 **Budget Tracking**: Combined spending across shopping and services
+- ✅ **Approval Workflow**: Manager approval for high-value transactions
+- 🔒 **Multi-User**: Isolated accounts, budgets, wallets per user
 
-### Option 1: Automated Setup (Recommended)
+### **Agent-to-Agent (x402)**
+- ⚡ **Micropayments**: USDC payments on Solana (~ $0.10-0.50 per service)
+- 🔐 **x402 Protocol**: Payment-required handshake for agent services
+- 💼 **Auto Wallet**: Solana wallets created automatically when needed
+- 📊 **Agent Registry**: Discover and request services from registered agents
 
+### **Technical Stack**
+- 🐳 **Docker Ready** - Deploy anywhere
+- 🔒 **Email Auth** - Secure user management
+- 📊 **SQLite** - Lightweight, persistent storage
+- 🌐 **Solana Web3** - Blockchain payments
+- 💳 **Stripe** - Traditional payments
+
+## 🚀 Quick Start - Local Testing with HTTPS Tunnel
+
+### **Step 1: Start HTTPS Tunnel**
+
+**Option A - Cloudflare (Easiest, no signup):**
 ```bash
 cd /Users/cyrus19901/Repository/agentic-commerce
-
-# Run the quick start script
-./scripts/quick-start.sh
+make tunnel          # Start docker + tunnel
+make tunnel-url      # Copy this URL
+make tunnel-db-setup # Setup database
 ```
 
-This will:
-- ✅ Check Docker installation
-- 📝 Create .env file
-- 🔨 Build Docker images
-- 🚀 Start containers
-- 📦 Setup database
-- 🔑 Generate JWT token
+**Option B - Ngrok (Requires account):**
+```bash
+# 1. Get token: https://dashboard.ngrok.com/get-started/your-authtoken
+export NGROK_AUTHTOKEN=your_token_here
 
-**Copy the JWT token** from the output - you'll need it for ChatGPT!
+# 2. Start
+make ngrok           # Start docker + ngrok
+make ngrok-url       # Copy this URL
+make ngrok-db-setup  # Setup database
+```
+
+### **Step 2: Configure ChatGPT**
+
+1. Open `docs/gpt-action-schema-seamless.yaml`
+2. Replace `https://your-tunnel-url.trycloudflare.com` with YOUR tunnel URL
+3. Upload schema to ChatGPT GPT editor → Actions
+4. Copy instructions from `docs/CHATGPT_INSTRUCTIONS_UNIFIED.md` → Instructions field
+
+### **Step 3: Test**
+```
+"My email is test@example.com"
+"Find notebooks under $30"
+"Buy the first one"
+"Scrape https://example.com"
+```
+
+**Note**: Tunnel URL changes each restart - update ChatGPT schema accordingly.
 
 ### Option 2: Manual Setup
 
@@ -92,20 +127,27 @@ Once started, you'll have:
 - **Health Check**: http://localhost:3000/health
 - **DB Viewer**: http://localhost:8080
 
-### Configure ChatGPT GPT
+### **Test Both Modes**
 
-1. Go to https://chat.openai.com/gpts/editor
-2. Click **Create a GPT**
-3. Follow the detailed instructions in [`docs/chatgpt-gpt-config.md`](./docs/chatgpt-gpt-config.md)
-4. Add your JWT token to the authentication settings
-5. Use `http://localhost:3000` as the API URL (or your deployed URL)
+#### **Shopping (Agent-to-Merchant)**
+```
+"Find me a notebook under $30"
+→ ChatGPT searches products
+→ Policy check
+→ Stripe checkout URL
+→ Pay with credit card
+```
 
-### Test It!
+#### **Services (Agent-to-Agent)**
+```
+"Scrape https://techcrunch.com"
+→ ChatGPT creates Solana wallet (auto)
+→ Policy check
+→ Pays 0.1 USDC on Solana
+→ Returns scraped data
+```
 
-In your ChatGPT GPT, try:
-- "Find me a leather notebook under $50"
-- "What's my spending this month?"
-- "Show me handmade jewelry"
+**User Experience**: One ChatGPT, seamless routing, no payment method selection needed!
 
 ### Troubleshooting
 
@@ -423,23 +465,33 @@ make build
 make dev
 ```
 
-## 📚 Additional Resources
+## 📚 Documentation
 
-- [ChatGPT GPT Configuration Guide](./docs/chatgpt-gpt-config.md)
-- [Architecture Documentation](./docs/architecture.md)
-- [Policy Configuration](./docs/policies.md)
-- [API Reference](./docs/api-reference.md)
+- **[Quick Start Guide](./docs/QUICK_START.md)** - Get started in 5 minutes
+- **[Seamless Commerce Solution](./docs/SEAMLESS_COMMERCE_SOLUTION.md)** - Complete architecture guide
+- **[ChatGPT Instructions](./docs/CHATGPT_INSTRUCTIONS_UNIFIED.md)** - ChatGPT configuration
+- **[OpenAPI Schema](./docs/gpt-action-schema-seamless.yaml)** - API specification
+- **[Solana Implementation](./docs/SOLANA_WALLET_VERIFICATION.md)** - Wallet & ATA verification
+- **[Testing Guide](./docs/TEST_ON_GPT.md)** - Test scenarios
 
-## 💡 What's Next?
+## ✅ Implementation Status
 
-- [ ] Add real Etsy API integration
-- [ ] Implement Stripe payment processing
-- [ ] Add webhook support for order updates
-- [ ] Create admin dashboard for policy management
-- [ ] Add multi-tenant support
-- [ ] Implement caching layer
-- [ ] Add comprehensive test suite
-- [ ] Set up CI/CD pipeline
+**Completed**:
+- ✅ Dual-mode commerce (Stripe + Solana)
+- ✅ Unified policy engine with `transactionType` support
+- ✅ Agent-to-agent transactions via x402 protocol
+- ✅ Solana USDC micropayments
+- ✅ Auto wallet creation
+- ✅ Spending tracking across both transaction types
+- ✅ Approval workflow for Stripe purchases
+- ✅ Multi-user with isolated wallets and budgets
+
+**Future Enhancements**:
+- [ ] Approval workflow for agent-to-agent services
+- [ ] Real-time policy updates
+- [ ] Advanced agent discovery and pricing
+- [ ] Multi-chain support (Ethereum, Polygon)
+- [ ] Analytics dashboard
 
 ## ⭐ Support
 
