@@ -6,19 +6,13 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "db:setup": "tsx src/setup.ts",
-    "db:migrate": "prisma migrate dev",
-    "db:generate": "prisma generate",
-    "db:push": "prisma db push",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:setup": "tsx src/setup.ts"
   },
   "dependencies": {
     "@agentic-commerce/shared": "*",
-    "@prisma/client": "^5.22.0",
     "better-sqlite3": "^11.0.0"
   },
   "devDependencies": {
-    "prisma": "^5.22.0",
     "tsx": "^4.7.0",
     "typescript": "^5.3.0"
   }
