@@ -152,6 +152,18 @@ export class DB {
 
       CREATE INDEX IF NOT EXISTS idx_agent_id ON registered_agents(agent_id);
       CREATE INDEX IF NOT EXISTS idx_agent_active ON registered_agents(active, verified);
+
+      -- User Wallets for Solana/USDC payments
+      CREATE TABLE IF NOT EXISTS user_wallets (
+        user_id TEXT PRIMARY KEY,
+        public_key TEXT UNIQUE NOT NULL,
+        secret_key TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_wallet_pubkey ON user_wallets(public_key);
     `);
   }
 
