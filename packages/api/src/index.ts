@@ -1196,6 +1196,21 @@ app.post('/api/auth/create-user', async (req, res) => {
     // Create or get user in database
     const user = await db.createOrGetUser(email, name);
 
+    // Assign all active policies to new users
+    try {
+      const allPolicies = db.db.prepare('SELECT id FROM policies WHERE enabled = 1').all() as any[];
+      console.log(`📋 Assigning ${allPolicies.length} policies to user ${user.email}`);
+      
+      for (const policy of allPolicies) {
+        db.db.prepare('INSERT OR IGNORE INTO user_policies (user_id, policy_id, active) VALUES (?, ?, 1)')
+          .run(user.id, policy.id);
+      }
+      console.log(`✅ Assigned policies to ${user.email}`);
+    } catch (policyError: any) {
+      console.error('⚠️  Failed to assign policies:', policyError.message);
+      // Don't fail user creation if policy assignment fails
+    }
+
     res.json({
       success: true,
       user: {
@@ -1209,6 +1224,65 @@ app.post('/api/auth/create-user', async (req, res) => {
     console.error('Create user error:', error);
     res.status(500).json({
       error: 'Failed to create user',
+      details: error.message,
+    });
+  }
+});
+
+// Admin endpoint to assign policies to existing users
+app.post('/api/admin/assign-policies', async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      // Assign to all users
+      const allUsers = db.db.prepare('SELECT id, email FROM users').all() as any[];
+      const allPolicies = db.db.prepare('SELECT id FROM policies WHERE enabled = 1').all() as any[];
+      
+      console.log(`📋 Assigning ${allPolicies.length} policies to ${allUsers.length} users`);
+      
+      let assignedCount = 0;
+      for (const user of allUsers) {
+        for (const policy of allPolicies) {
+          try {
+            db.db.prepare('INSERT OR IGNORE INTO user_policies (user_id, policy_id, active) VALUES (?, ?, 1)')
+              .run(user.id, policy.id);
+            assignedCount++;
+          } catch (e) {
+            // Ignore duplicates
+          }
+        }
+        console.log(`✅ Assigned policies to ${user.email}`);
+      }
+      
+      return res.json({
+        success: true,
+        message: `Assigned policies to ${allUsers.length} users`,
+        usersUpdated: allUsers.length,
+        policiesPerUser: allPolicies.length,
+        totalAssignments: assignedCount
+      });
+    }
+
+    // Assign to specific user
+    const allPolicies = db.db.prepare('SELECT id FROM policies WHERE enabled = 1').all() as any[];
+    console.log(`📋 Assigning ${allPolicies.length} policies to user ${userId}`);
+    
+    for (const policy of allPolicies) {
+      db.db.prepare('INSERT OR IGNORE INTO user_policies (user_id, policy_id, active) VALUES (?, ?, 1)')
+        .run(userId, policy.id);
+    }
+    
+    res.json({
+      success: true,
+      message: `Assigned ${allPolicies.length} policies to user`,
+      userId,
+      policiesAssigned: allPolicies.length
+    });
+  } catch (error: any) {
+    console.error('Policy assignment error:', error);
+    res.status(500).json({
+      error: 'Failed to assign policies',
       details: error.message,
     });
   }
