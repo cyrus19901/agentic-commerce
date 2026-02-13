@@ -155,14 +155,15 @@ export class DB {
 
       -- User Wallets for Solana/USDC payments
       CREATE TABLE IF NOT EXISTS user_wallets (
-        user_id TEXT PRIMARY KEY,
+        id TEXT PRIMARY KEY,
+        user_id TEXT UNIQUE NOT NULL,
         public_key TEXT UNIQUE NOT NULL,
-        secret_key TEXT NOT NULL,
+        encrypted_secret TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id)
       );
 
+      CREATE INDEX IF NOT EXISTS idx_wallet_user_id ON user_wallets(user_id);
       CREATE INDEX IF NOT EXISTS idx_wallet_pubkey ON user_wallets(public_key);
     `);
   }
