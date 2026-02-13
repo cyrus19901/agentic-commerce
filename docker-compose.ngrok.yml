@@ -1,0 +1,83 @@
+services:
+  # Main API service
+  agentic-commerce-api:
+    container_name: agentic-commerce-local
+    image: agentic-commerce:local
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      tags:
+        - agentic-commerce:local
+    expose:
+      - "3000"
+    volumes:
+      - ./packages:/app/packages
+      - ./data:/app/data
+      - /app/node_modules
+      - /app/packages/api/node_modules
+      - /app/packages/core/node_modules
+      - /app/packages/database/node_modules
+      - /app/packages/integrations/node_modules
+      - /app/packages/shared/node_modules
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - DATABASE_PATH=/app/data/shopping.db
+      - JWT_SECRET=${JWT_SECRET:-dev-secret-change-in-production}
+      - API_URL=https://${NGROK_DOMAIN:-localhost}
+      - FRONTEND_URL=http://localhost:3001
+      
+      # Solana Configuration
+      - SOLANA_CLUSTER=${SOLANA_CLUSTER:-devnet}
+      - SOLANA_RPC_DEVNET=${SOLANA_RPC_DEVNET:-https://solana-devnet.g.alchemy.com/v2/ZJmVXF-LVxv651ws9azjqBr6Upv_l9_5}
+      - SOLANA_RPC_MAINNET=${SOLANA_RPC_MAINNET:-https://api.mainnet-beta.solana.com}
+      - USDC_MINT_DEVNET=${USDC_MINT_DEVNET:-Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr}
+      - USDC_MINT_MAINNET=${USDC_MINT_MAINNET:-EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v}
+      
+      # Agent Configuration
+      - AGENT_ID=${AGENT_ID:-agent://agentic-commerce/v1}
+      - USDC_TOKEN_ACCOUNT=${USDC_TOKEN_ACCOUNT:-Aj3Z8i5HQ1z9poYBfCicYXHCtfzry9ijcQyunPTaoG4g}
+      - SOLANA_PUBKEY=${SOLANA_PUBKEY:-2ZqWhcwYPqXKdtyCHSazqwp1F1ducfKvxLAbz95A8jkk}
+      
+      # Facilitator
+      - FACILITATOR_URL=https://${NGROK_DOMAIN:-localhost}/api/facilitator
+      - FACILITATOR_SHARED_SECRET=${FACILITATOR_SHARED_SECRET:-dev-secret-change-in-production}
+      
+      # Stripe (optional)
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - USE_MOCK_PAYMENTS=${USE_MOCK_PAYMENTS:-true}
+      
+    command: npm run dev
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - agentic-commerce-network
+
+  # Ngrok tunnel (expose to internet with HTTPS)
+  ngrok:
+    container_name: agentic-commerce-ngrok
+    image: ngrok/ngrok:latest
+    command: http agentic-commerce-local:3000
+    ports:
+      - "4040:4040"  # ngrok dashboard
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    depends_on:
+      agentic-commerce-api:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - agentic-commerce-network
+
+networks:
+  agentic-commerce-network:
+    driver: bridge
+
+volumes:
+  data:
+    driver: local

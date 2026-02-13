@@ -47,7 +47,17 @@ export class PaymentService {
   async initiateCheckout(request: CheckoutRequest): Promise<CheckoutResponse> {
     // DEVELOPMENT MODE: Use mock checkout for policy testing
     // Set USE_MOCK_PAYMENTS=true in .env to skip Stripe and test policies
-    const useMockPayments = process.env.USE_MOCK_PAYMENTS === 'true' || process.env.NODE_ENV === 'development';
+    // If USE_MOCK_PAYMENTS is explicitly set to 'false', use real Stripe even in development
+    console.log('💡 Payment debug:', {
+      USE_MOCK_PAYMENTS: process.env.USE_MOCK_PAYMENTS,
+      NODE_ENV: process.env.NODE_ENV,
+      hasStripe: !!this.stripe,
+    });
+    const useMockPayments = process.env.USE_MOCK_PAYMENTS === 'false' 
+      ? false 
+      : (process.env.USE_MOCK_PAYMENTS === 'true' || process.env.NODE_ENV === 'development');
+    
+    console.log('💡 useMockPayments:', useMockPayments);
     
     if (useMockPayments || !this.stripe) {
       console.log('🧪 Using mock checkout (policy testing mode)');
@@ -79,8 +89,8 @@ export class PaymentService {
           },
         ],
         mode: 'payment',
-        success_url: `${process.env.API_URL || 'https://agentic-commerce-api-latest.onrender.com'}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${process.env.API_URL || 'https://agentic-commerce-api-latest.onrender.com'}/checkout/cancel`,
+        success_url: `${process.env.API_URL || 'http://localhost:3000'}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.API_URL || 'http://localhost:3000'}/checkout/cancel`,
         metadata: {
           userId: request.userId,
           productId: request.productId,
@@ -100,7 +110,7 @@ export class PaymentService {
         success: true,
         sessionId: session.id,
         checkoutUrl: session.url!,
-        invoiceUrl: `https://agentic-commerce-api-latest.onrender.com/api/invoices/${session.id}`,
+        invoiceUrl: `${process.env.API_URL || 'http://localhost:3000'}/api/invoices/${session.id}`,
         productId: request.productId,
         productName: request.productName,
         amount: request.amount,
@@ -195,7 +205,7 @@ export class PaymentService {
       success: true,
       sessionId: mockSessionId,
       checkoutUrl: request.productUrl || `https://example.com/product/${request.productId}`,
-      invoiceUrl: `https://agentic-commerce-api-latest.onrender.com/api/invoices/${mockSessionId}`,
+      invoiceUrl: `${process.env.API_URL || 'http://localhost:3000'}/api/invoices/${mockSessionId}`,
       productId: request.productId,
       productName: request.productName,
       amount: request.amount,

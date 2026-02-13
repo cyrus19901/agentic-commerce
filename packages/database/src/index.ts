@@ -8,7 +8,7 @@ import Database from 'better-sqlite3';
 import { Policy } from '@agentic-commerce/shared';
 
 export class DB {
-  private db: any;
+  public db: any;
 
   constructor(path: string = './data/shopping.db') {
     try {
@@ -58,6 +58,19 @@ export class DB {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS user_policies (
+        user_id TEXT NOT NULL,
+        policy_id TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, policy_id),
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (policy_id) REFERENCES policies(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_user_policies_user ON user_policies(user_id);
+      CREATE INDEX IF NOT EXISTS idx_user_policies_policy ON user_policies(policy_id);
+
       CREATE TABLE IF NOT EXISTS products (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -84,8 +97,12 @@ export class DB {
         category TEXT,
         allowed INTEGER NOT NULL,
         requires_approval INTEGER DEFAULT 0,
+        approval_status TEXT DEFAULT NULL,
         policy_results TEXT NOT NULL,
         checkout_method TEXT DEFAULT 'traditional',
+        transaction_type TEXT DEFAULT 'agent-to-merchant',
+        payment_method TEXT DEFAULT 'stripe',
+        blockchain_tx_signature TEXT,
         timestamp TEXT NOT NULL
       );
 
@@ -156,7 +173,7 @@ export class DB {
     return mapped;
   }
 
-  async getUserSpending(userId: string, period: 'daily' | 'weekly' | 'monthly'): Promise<number> {
+  async getUserSpending(userId: string, period: 'daily' | 'weekly' | 'monthly', transactionType?: 'agent-to-merchant' | 'agent-to-agent'): Promise<number> {
     const now = new Date();
     let startDate: Date;
 
@@ -174,45 +191,62 @@ export class DB {
         break;
     }
 
-    const result = this.db.prepare(`
+    // Ensure transaction_type column exists
+    let hasTransactionType = false;
+    try {
+      this.db.prepare('SELECT transaction_type FROM purchase_attempts LIMIT 1').get();
+      hasTransactionType = true;
+    } catch (e) {
+      // Column doesn't exist yet, will be created on next recordPurchaseAttempt
+    }
+
+    let query = `
       SELECT COALESCE(SUM(amount), 0) as total
       FROM purchase_attempts
       WHERE user_id = ? AND allowed = 1 AND timestamp >= ?
-    `).get(userId, startDate.toISOString());
+    `;
+    
+    const params: any[] = [userId, startDate.toISOString()];
+
+    // Filter by transaction type if specified and column exists
+    if (transactionType && hasTransactionType) {
+      query += ' AND transaction_type = ?';
+      params.push(transactionType);
+    }
+
+    const result = this.db.prepare(query).get(...params);
 
     return result.total;
   }
 
-  async recordPurchaseAttempt(attempt: any): Promise<void> {
-    // Check if requires_approval column exists, if not, add it
-    try {
-      this.db.prepare('SELECT requires_approval FROM purchase_attempts LIMIT 1').get();
-    } catch (e) {
-      // Column doesn't exist, add it
+  async recordPurchaseAttempt(attempt: any): Promise<number> {
+    // Ensure all new columns exist
+    const columnsToAdd = [
+      { name: 'requires_approval', def: 'INTEGER DEFAULT 0' },
+      { name: 'product_name', def: 'TEXT' },
+      { name: 'checkout_method', def: 'TEXT DEFAULT "traditional"' },
+      { name: 'approval_status', def: 'TEXT DEFAULT NULL' },
+      { name: 'transaction_type', def: 'TEXT DEFAULT "agent-to-merchant"' },
+      { name: 'payment_method', def: 'TEXT DEFAULT "stripe"' },
+      { name: 'blockchain_tx_signature', def: 'TEXT' },
+    ];
+
+    for (const col of columnsToAdd) {
       try {
-        this.db.prepare('ALTER TABLE purchase_attempts ADD COLUMN requires_approval INTEGER DEFAULT 0').run();
-        this.db.prepare('ALTER TABLE purchase_attempts ADD COLUMN product_name TEXT').run();
-      } catch (alterError) {
-        // Column might already exist, ignore
+        this.db.prepare(`SELECT ${col.name} FROM purchase_attempts LIMIT 1`).get();
+      } catch (e) {
+        try {
+          this.db.prepare(`ALTER TABLE purchase_attempts ADD COLUMN ${col.name} ${col.def}`).run();
+        } catch (alterError) {
+          // Column might already exist, ignore
+        }
       }
     }
 
-    // Check if checkout_method column exists
-    try {
-      this.db.prepare('SELECT checkout_method FROM purchase_attempts LIMIT 1').get();
-    } catch (e) {
-      // Column doesn't exist, add it
-      try {
-        this.db.prepare('ALTER TABLE purchase_attempts ADD COLUMN checkout_method TEXT DEFAULT "traditional"').run();
-      } catch (alterError) {
-        // Column might already exist, ignore
-      }
-    }
-
-    this.db.prepare(`
+    const result = this.db.prepare(`
       INSERT INTO purchase_attempts 
-      (user_id, product_id, product_name, amount, merchant, category, allowed, requires_approval, policy_results, checkout_method, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (user_id, product_id, product_name, amount, merchant, category, allowed, requires_approval, approval_status, policy_results, checkout_method, transaction_type, payment_method, blockchain_tx_signature, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       attempt.userId,
       attempt.productId,
@@ -222,10 +256,16 @@ export class DB {
       attempt.category || null,
       attempt.allowed ? 1 : 0,
       attempt.requiresApproval ? 1 : 0,
+      attempt.approvalStatus || null,
       JSON.stringify(attempt.policyCheckResults || []),
       attempt.checkoutMethod || 'traditional',
+      attempt.transactionType || 'agent-to-merchant',
+      attempt.paymentMethod || 'stripe',
+      attempt.blockchainTxSignature || null,
       new Date().toISOString()
     );
+
+    return result.lastInsertRowid as number;
   }
 
   async createPolicy(policy: Policy): Promise<void> {

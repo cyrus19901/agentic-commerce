@@ -1,9 +1,10 @@
 services:
-  api:
-    image: agentic-commerce:dev
+  agentic-commerce-api:
+    container_name: agentic-commerce-api-prod
+    image: agentic-commerce-api:latest
     build:
       context: .
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
     ports:
       - "3000:3000"
     volumes:

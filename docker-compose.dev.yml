@@ -1,6 +1,7 @@
 services:
-  agentic-commerce-dev:
-    container_name: agentic-commerce-dev
+  agentic-commerce-api:
+    container_name: agentic-commerce-api-dev
+    image: agentic-commerce-api:dev
     build:
       context: .
       dockerfile: Dockerfile.dev

@@ -1,0 +1,712 @@
+openapi: 3.1.0
+info:
+  title: Agentic Commerce - Unified API
+  description: |
+    **🤖 ChatGPT Agentic Commerce Platform**
+    
+    I can help you with TWO types of transactions:
+    
+    ## 1️⃣ **Shopping (Agent-to-Merchant)**
+    Buy physical products from stores:
+    - Office supplies, electronics, bags, furniture
+    - Payment via Stripe
+    - Examples: "Buy office chair", "Find headphones under $200"
+    
+    ## 2️⃣ **Agent Services (Agent-to-Agent)**  
+    Request services from other AI agents:
+    - Data scraping, API calls, computations, analytics
+    - Payment via Solana USDC micropayments
+    - Examples: "Scrape this website", "Call this API for me"
+    
+    ---
+    
+    ## 🔐 **Authentication (REQUIRED FIRST STEP)**
+    
+    **ALWAYS start by asking for the user's email:**
+    1. Ask: "What's your email address?"
+    2. Call `createUser` with their email
+    3. **Include `user_email` in ALL subsequent requests**
+    
+    ---
+    
+    ## 🛍️ **Agent-to-Merchant Workflow (Shopping)**
+    
+    **When user wants to BUY PRODUCTS from stores/merchants:**
+    
+    1. **Search**: `searchProducts` with query (e.g., "office chair")
+    2. **Check Policy**: `checkPolicy` with `transaction_type: "agent-to-merchant"`
+    3. **If Allowed**: `initiateCheckout` → Get Stripe checkout URL
+    4. **If Requires Approval**: Tell user "This requires manager approval"
+    5. **If Denied**: Explain why and suggest alternatives
+    
+    **Key Fields for Shopping:**
+    - `product_id`, `product_name`, `price`, `merchant`, `category`
+    - Uses **Stripe** for payment
+    - Returns **checkout_url** for payment
+    
+    ---
+    
+    ## 🤖 **Agent-to-Agent Workflow (Services)**
+    
+    **When user wants to REQUEST SERVICES from other agents:**
+    
+    1. **Discover** (optional): `listAgents` to see available services
+    2. **Request Service**: `requestService` with agent ID and service details
+       - Backend automatically:
+         - Creates Solana wallet if needed
+         - Checks policy
+         - Executes USDC payment on Solana
+         - Calls seller agent
+         - Returns service result
+    
+    **Examples of Agent Services:**
+    - "Scrape https://example.com and extract the title"
+    - "Call the weather API for New York"
+    - "Process this data using analytics service"
+    
+    **Key Fields for Services:**
+    - `agent_id` (e.g., "agent://scraper/v1")
+    - `service_type` (e.g., "data-scraping")
+    - `service_params` (service-specific, e.g., {"url": "...", "fields": [...]})
+    - Uses **Solana USDC** for payment
+    - Returns **service result** + transaction proof
+    
+    ---
+    
+    ## 🎯 **How to Decide Which Flow:**
+    
+    **Use Agent-to-Merchant (Stripe) when:**
+    - User wants to BUY PHYSICAL PRODUCTS
+    - Keywords: "buy", "purchase", "order", "get me", product names
+    - Examples: "chair", "notebook", "headphones", "backpack"
+    
+    **Use Agent-to-Agent (Solana) when:**
+    - User wants to REQUEST SERVICES/ACTIONS
+    - Keywords: "scrape", "call API", "fetch data", "process", "analyze"
+    - Examples: "scrape website", "call weather API", "analyze data"
+    
+    ---
+    
+    ## 📋 **Policy Enforcement (Both Flows)**
+    
+    **ALWAYS check policies before completing transactions!**
+    
+    Policies may restrict:
+    - Transaction amounts
+    - Budget limits (daily/weekly/monthly)
+    - Allowed/blocked merchants or agents
+    - Categories or service types
+    - Time restrictions (business hours, weekdays)
+    - Transaction purposes
+    
+    **Policy Results:**
+    - `allowed: true` → Proceed
+    - `allowed: false` → Block transaction, explain why
+    - `requiresApproval: true` → Inform user approval needed
+    
+    ---
+    
+    ## 💡 **Important UX Guidelines:**
+    
+    1. **Auto-detect transaction type** from user intent (don't ask "shopping or service?")
+    2. **Wallet management is automatic** - don't mention Solana/wallets unless funding needed
+    3. **Show payment methods naturally**:
+       - Shopping: "I'll create a Stripe checkout for you"
+       - Services: "I'll pay the agent 0.1 USDC on Solana"
+    4. **Handle funding gracefully**:
+       - If Solana wallet has insufficient USDC, provide funding instructions
+       - Don't block the flow - explain clearly how to fund
+    5. **Policy violations**:
+       - Always explain WHY (budget exceeded, blocked merchant, etc.)
+       - Suggest alternatives (cheaper items, different merchant, wait until next period)
+    
+    ---
+    
+    ## 🔑 **Available Inventory:**
+    
+    **Products (Agent-to-Merchant):**
+    - Office: notebooks ($20), pens ($15), desk organizers ($35), chairs ($250), desks ($180)
+    - Electronics: headphones ($200), keyboards ($130), mice ($50), webcams ($150)
+    - Bags: leather notebooks ($28-42), backpacks ($90), briefcases ($120)
+    - Travel: luggage tags ($19), passport holders ($28), adapters ($33)
+    
+    **Services (Agent-to-Agent):**
+    - data-scraping: Extract data from websites (~$0.10 USDC)
+    - api-calling: Make API requests (~$0.05 USDC)
+    - computation: Process data/run calculations (~$0.20 USDC)
+    
+    Use `searchProducts` or `listAgents` to discover what's available!
+    
+  version: 2.0.0
+
+servers:
+  - url: https://greene-men-pct-seems.trycloudflare.com
+    description: Local Docker environment via Cloudflare Tunnel
+
+paths:
+  # ============================================================================
+  # AUTHENTICATION (Start Here)
+  # ============================================================================
+  
+  /api/auth/create-user:
+    post:
+      operationId: createUser
+      summary: Create user account
+      description: |
+        **CALL THIS FIRST!**
+        Create or retrieve user account. Required before any transactions.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "cyrus19901@gmail.com"
+                name:
+                  type: string
+                  example: "Cyrus"
+      responses:
+        '200':
+          description: User created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  user:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      email:
+                        type: string
+                      name:
+                        type: string
+
+  # ============================================================================
+  # SHOPPING (Agent-to-Merchant via Stripe)
+  # ============================================================================
+  
+  /api/products/search:
+    post:
+      operationId: searchProducts
+      summary: Search for products from merchants
+      description: |
+        Search for physical products to buy from stores.
+        Use this when user wants to BUY/PURCHASE items.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+                - user_email
+              properties:
+                user_email:
+                  type: string
+                  format: email
+                  description: User's email (REQUIRED)
+                query:
+                  type: string
+                  example: "office chair"
+                max_price:
+                  type: number
+                  example: 200
+                limit:
+                  type: integer
+                  default: 10
+      responses:
+        '200':
+          description: Product results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  products:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        title:
+                          type: string
+                        price:
+                          type: number
+                        merchant:
+                          type: string
+                        category:
+                          type: string
+                        imageUrl:
+                          type: string
+                        url:
+                          type: string
+
+  /api/policy/check:
+    post:
+      operationId: checkPolicy
+      summary: Check if transaction complies with policies
+      description: |
+        **CRITICAL: Call BEFORE any purchase or service request!**
+        
+        Verifies transaction compliance. Works for BOTH transaction types.
+        
+        **For Shopping**: Include product details
+        **For Services**: Include agent and service details
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_email
+                - price
+              properties:
+                user_email:
+                  type: string
+                  format: email
+                  description: User's email (REQUIRED)
+                
+                # Transaction type (helps policy engine)
+                transaction_type:
+                  type: string
+                  enum: ["agent-to-merchant", "agent-to-agent"]
+                  description: Type of transaction (shopping vs service request)
+                  example: "agent-to-merchant"
+                
+                # Common fields
+                product_id:
+                  type: string
+                  description: Product ID (for shopping) or service ID (for services)
+                price:
+                  type: number
+                  description: Transaction amount in USD (or USDC)
+                merchant:
+                  type: string
+                  description: Merchant name (shopping) or agent ID (services)
+                category:
+                  type: string
+                  description: Product category or service type
+                
+                # Optional context fields
+                agent_name:
+                  type: string
+                agent_type:
+                  type: string
+                purpose:
+                  type: string
+      responses:
+        '200':
+          description: Policy result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  allowed:
+                    type: boolean
+                    description: If false, STOP - don't proceed
+                  requiresApproval:
+                    type: boolean
+                    description: If true, tell user "manager approval needed"
+                  reason:
+                    type: string
+                  matchedPolicies:
+                    type: array
+
+  /api/checkout/initiate:
+    post:
+      operationId: initiateCheckout
+      summary: Create Stripe checkout
+      description: Creates Stripe payment session for products. CRITICAL - Display complete checkout URL including hash fragment. If requiresApproval true, tell user approval needed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_email
+                - product_id
+                - amount
+                - merchant
+              properties:
+                user_email:
+                  type: string
+                  format: email
+                product_id:
+                  type: string
+                product_name:
+                  type: string
+                amount:
+                  type: number
+                merchant:
+                  type: string
+                category:
+                  type: string
+                product_url:
+                  type: string
+                product_image_url:
+                  type: string
+      responses:
+        '200':
+          description: Checkout created or pending approval
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  # Auto-approved flow
+                  checkout_url:
+                    type: string
+                    description: Full Stripe URL with hash - display complete URL
+                  checkout_session_id:
+                    type: string
+                  expires_at:
+                    type: string
+                  
+                  # Approval required flow
+                  requiresApproval:
+                    type: boolean
+                    description: If true, no checkout URL - approval needed
+                  purchaseId:
+                    type: number
+                  status:
+                    type: string
+                  message:
+                    type: string
+
+  # ============================================================================
+  # AGENT SERVICES (Agent-to-Agent via Solana/x402)
+  # ============================================================================
+  
+  /api/registry/agents:
+    get:
+      operationId: listAgents
+      summary: Discover available agent services
+      description: |
+        **Use when user wants services from other agents.**
+        
+        Lists agents offering services like scraping, API calls, data processing.
+        
+        **When to use**: User asks for services, not products.
+      parameters:
+        - name: user_email
+          in: query
+          required: true
+          schema:
+            type: string
+            format: email
+        - name: service_type
+          in: query
+          schema:
+            type: string
+          description: Filter by service (data-scraping, api-calling, etc.)
+      responses:
+        '200':
+          description: Available agents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        agentId:
+                          type: string
+                          example: "agent://scraper/v1"
+                        name:
+                          type: string
+                        services:
+                          type: array
+                          items:
+                            type: string
+                        serviceDescription:
+                          type: string
+                        pricing:
+                          type: object
+                          properties:
+                            data-scraping:
+                              type: number
+                              example: 0.1
+                              description: Price in USDC
+
+  /api/chatgpt-agent/request-service:
+    post:
+      operationId: requestService
+      summary: Request AI agent service
+      description: Request service from AI agent. Auto-creates wallet, checks policy, pays USDC on Solana, returns result. Use for scraping, API calls, data processing. If wallet needs funding, returns instructions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_email
+                - agentId
+                - serviceType
+              properties:
+                user_email:
+                  type: string
+                  format: email
+                  example: "cyrus19901@gmail.com"
+                
+                agentId:
+                  type: string
+                  description: Agent to request service from
+                  example: "agent://seller-test/v1"
+                
+                serviceType:
+                  type: string
+                  enum: [data-scraping, api-calling, computation, data-processing]
+                  description: Type of service needed
+                  example: "data-scraping"
+                
+                serviceParams:
+                  type: object
+                  description: Service-specific parameters
+                  properties:
+                    # For data-scraping
+                    url:
+                      type: string
+                      example: "https://example.com"
+                    extract_fields:
+                      type: array
+                      items:
+                        type: string
+                      example: ["title", "description"]
+                    
+                    # For api-calling
+                    api_url:
+                      type: string
+                    method:
+                      type: string
+                      example: "GET"
+                    headers:
+                      type: object
+                    payload:
+                      type: object
+      responses:
+        '200':
+          description: Service completed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  service:
+                    type: string
+                    example: "data-scraping"
+                  agent:
+                    type: string
+                    example: "agent://seller-test/v1"
+                  
+                  payment:
+                    type: object
+                    properties:
+                      amount:
+                        type: number
+                        description: Amount paid in USDC
+                        example: 0.1
+                      currency:
+                        type: string
+                        example: "USDC"
+                      txSignature:
+                        type: string
+                        description: Solana transaction signature
+                      explorerUrl:
+                        type: string
+                        description: View transaction on Solscan
+                        example: "https://solscan.io/tx/abc123?cluster=devnet"
+                  
+                  serviceResult:
+                    type: object
+                    description: Service response (varies by service)
+                    properties:
+                      data:
+                        type: object
+                      message:
+                        type: string
+                  
+                  message:
+                    type: string
+                    example: "Successfully scraped data and paid 0.1 USDC to agent"
+        
+        '400':
+          description: Bad request or insufficient funds
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  # If wallet needs funding
+                  wallet:
+                    type: object
+                    properties:
+                      publicKey:
+                        type: string
+                      tokenAccount:
+                        type: string
+                      currentBalance:
+                        type: number
+                      requiredAmount:
+                        type: number
+                      fundingInstructions:
+                        type: string
+        
+        '403':
+          description: Policy violation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "POLICY_VIOLATION"
+                  reason:
+                    type: string
+                  matchedPolicies:
+                    type: array
+
+  /api/chatgpt-agent/wallet:
+    post:
+      operationId: getWallet
+      summary: Get Solana wallet details (optional - auto-created in requestService)
+      description: |
+        Get user's Solana wallet for agent-to-agent transactions.
+        
+        **Usually not needed** - wallet is auto-created when requesting services.
+        
+        Use this ONLY if user explicitly asks:
+        - "Show me my wallet"
+        - "What's my Solana balance?"
+        - "How do I fund my wallet?"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_email
+              properties:
+                user_email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Wallet information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  wallet:
+                    type: object
+                    properties:
+                      publicKey:
+                        type: string
+                      tokenAccount:
+                        type: string
+                        description: USDC token account address
+                      network:
+                        type: string
+                        enum: [devnet, mainnet-beta]
+                      balances:
+                        type: object
+                        properties:
+                          sol:
+                            type: number
+                          usdc:
+                            type: number
+                      fundingInstructions:
+                        type: object
+                      solscanUrl:
+                        type: string
+
+  # ============================================================================
+  # SPENDING & POLICIES
+  # ============================================================================
+  
+  /api/policy/spending:
+    post:
+      operationId: getSpending
+      summary: Get spending summary
+      description: |
+        Get user's spending across BOTH transaction types:
+        - Shopping (Stripe purchases)
+        - Services (Solana payments)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_email
+              properties:
+                user_email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Spending breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  userId:
+                    type: string
+                  spending:
+                    type: object
+                    properties:
+                      daily:
+                        type: number
+                      weekly:
+                        type: number
+                      monthly:
+                        type: number
+                  breakdown:
+                    type: object
+                    properties:
+                      shopping:
+                        type: number
+                        description: Spent on products (Stripe)
+                      services:
+                        type: number
+                        description: Spent on agent services (Solana)
+
+components:
+  schemas: {}
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security: []

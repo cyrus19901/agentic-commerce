@@ -26,6 +26,7 @@ export interface Policy {
     users?: string[];
     departments?: string[];
     timeRange?: { start: string; end: string };
+    transactionType?: TransactionType[];
   };
   rules: {
     maxAmount?: number;

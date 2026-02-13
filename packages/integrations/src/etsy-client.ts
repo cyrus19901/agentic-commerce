@@ -930,7 +930,8 @@ export class EtsyClient {
 
       if (params.category) {
         const categoryLower = params.category.toLowerCase();
-        results = results.filter(p => p.category.toLowerCase() === categoryLower);
+        // Use "contains" match instead of exact match for more flexible filtering
+        results = results.filter(p => p.category.toLowerCase().includes(categoryLower));
         console.log(`After category filter (${params.category}): ${results.length} products`);
       }
 
