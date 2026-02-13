@@ -20,8 +20,12 @@ RUN npm install
 # Copy source code
 COPY . .
 
-# Build all packages
-RUN npm run build
+# Build packages in correct order (shared -> database -> others)
+RUN npm run build --workspace=@agentic-commerce/shared && \
+    npm run build --workspace=@agentic-commerce/database && \
+    npm run build --workspace=@agentic-commerce/core && \
+    npm run build --workspace=@agentic-commerce/integrations && \
+    npm run build --workspace=@agentic-commerce/api
 
 # Production stage
 FROM node:20-alpine
@@ -51,4 +55,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
 
 # Start the application
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["npm", "start"]
 
