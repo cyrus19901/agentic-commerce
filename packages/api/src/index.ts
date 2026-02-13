@@ -1235,18 +1235,27 @@ app.post('/api/admin/db-setup', async (req, res) => {
     console.log('🔧 Running database setup...');
     const { execSync } = require('child_process');
     
-    // Run db:setup script
-    const output = execSync('npm run db:setup', { 
+    // Run setup.ts directly with tsx
+    const setupPath = require('path').join(process.cwd(), 'packages/database/src/setup.ts');
+    console.log('Running setup from:', setupPath);
+    
+    const output = execSync(`npx tsx ${setupPath}`, {
       cwd: process.cwd(),
       encoding: 'utf-8',
-      timeout: 30000
+      timeout: 30000,
+      env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL || '/app/data/shopping.db' }
     });
     
     console.log('✅ Database setup complete');
+    console.log('Setup output:', output);
     
-    // Now assign policies to all users
+    // Verify policies were created
+    const allPolicies = db.db.prepare('SELECT id, name FROM policies WHERE enabled = 1').all() as any[];
+    console.log(`Found ${allPolicies.length} policies`);
+    
+    // Assign policies to all existing users
     const allUsers = db.db.prepare('SELECT id, email FROM users').all() as any[];
-    const allPolicies = db.db.prepare('SELECT id FROM policies WHERE enabled = 1').all() as any[];
+    console.log(`Assigning to ${allUsers.length} users`);
     
     for (const user of allUsers) {
       for (const policy of allPolicies) {
@@ -1260,13 +1269,14 @@ app.post('/api/admin/db-setup', async (req, res) => {
       message: 'Database setup completed successfully',
       policiesCreated: allPolicies.length,
       usersWithPolicies: allUsers.length,
-      output: output.substring(0, 500)
+      setupOutput: output.substring(0, 1000)
     });
   } catch (error: any) {
     console.error('DB setup error:', error);
     res.status(500).json({
       error: 'Database setup failed',
-      details: error.message
+      details: error.message,
+      stack: error.stack
     });
   }
 });
