@@ -283,15 +283,20 @@ export class DB {
 
   async createPolicy(policy: Policy): Promise<void> {
     const now = new Date().toISOString();
+    
+    // Extract transaction types from conditions if present
+    const transactionTypes = policy.conditions?.transactionType || ['agent-to-merchant'];
+    
     this.db.prepare(`
-      INSERT INTO policies (id, name, type, enabled, priority, conditions, rules, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO policies (id, name, type, enabled, priority, transaction_types, conditions, rules, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       policy.id,
       policy.name,
       policy.type,
       policy.enabled ? 1 : 0,
       policy.priority,
+      JSON.stringify(transactionTypes),
       JSON.stringify(policy.conditions),
       JSON.stringify(policy.rules),
       now,
@@ -328,15 +333,20 @@ export class DB {
 
   async updatePolicy(policy: Policy): Promise<void> {
     const now = new Date().toISOString();
+    
+    // Extract transaction types from conditions if present
+    const transactionTypes = policy.conditions?.transactionType || ['agent-to-merchant'];
+    
     this.db.prepare(`
       UPDATE policies 
-      SET name = ?, type = ?, enabled = ?, priority = ?, conditions = ?, rules = ?, updated_at = ?
+      SET name = ?, type = ?, enabled = ?, priority = ?, transaction_types = ?, conditions = ?, rules = ?, updated_at = ?
       WHERE id = ?
     `).run(
       policy.name,
       policy.type,
       policy.enabled ? 1 : 0,
       policy.priority,
+      JSON.stringify(transactionTypes),
       JSON.stringify(policy.conditions),
       JSON.stringify(policy.rules),
       now,
