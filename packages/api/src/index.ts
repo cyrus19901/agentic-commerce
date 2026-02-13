@@ -1229,6 +1229,48 @@ app.post('/api/auth/create-user', async (req, res) => {
   }
 });
 
+// Admin endpoint to initialize/re-run database setup
+app.post('/api/admin/db-setup', async (req, res) => {
+  try {
+    console.log('🔧 Running database setup...');
+    const { execSync } = require('child_process');
+    
+    // Run db:setup script
+    const output = execSync('npm run db:setup', { 
+      cwd: process.cwd(),
+      encoding: 'utf-8',
+      timeout: 30000
+    });
+    
+    console.log('✅ Database setup complete');
+    
+    // Now assign policies to all users
+    const allUsers = db.db.prepare('SELECT id, email FROM users').all() as any[];
+    const allPolicies = db.db.prepare('SELECT id FROM policies WHERE enabled = 1').all() as any[];
+    
+    for (const user of allUsers) {
+      for (const policy of allPolicies) {
+        db.db.prepare('INSERT OR IGNORE INTO user_policies (user_id, policy_id, active) VALUES (?, ?, 1)')
+          .run(user.id, policy.id);
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: 'Database setup completed successfully',
+      policiesCreated: allPolicies.length,
+      usersWithPolicies: allUsers.length,
+      output: output.substring(0, 500)
+    });
+  } catch (error: any) {
+    console.error('DB setup error:', error);
+    res.status(500).json({
+      error: 'Database setup failed',
+      details: error.message
+    });
+  }
+});
+
 // Admin endpoint to assign policies to existing users
 app.post('/api/admin/assign-policies', async (req, res) => {
   try {
