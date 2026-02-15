@@ -233,11 +233,13 @@ export class PolicyService {
         // Budget limit is specified, check it
         // Skip budget aggregation for 'transaction' period (per-transaction limits handled elsewhere)
         if (policy.rules.period !== 'transaction') {
-          const spent = await this.db.getUserSpending(request.userId, policy.rules.period!);
+          // Pass transactionType to filter spending correctly (e.g., only count agent-to-agent for A2A policies)
+          const spent = await this.db.getUserSpending(request.userId, policy.rules.period!, transactionType as 'agent-to-merchant' | 'agent-to-agent');
+          console.log(`💰 Budget check: spent $${spent} of $${policy.rules.maxAmount} (${policy.rules.period}, ${transactionType})`);
           if (spent + request.price > policy.rules.maxAmount) {
             return {
               passed: false,
-              reason: `Would exceed ${policy.rules.period} budget of $${policy.rules.maxAmount}`,
+              reason: `Would exceed ${policy.rules.period} budget of $${policy.rules.maxAmount} (spent: $${spent})`,
             };
           }
         } else {
