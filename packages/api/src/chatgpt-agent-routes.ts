@@ -280,15 +280,37 @@ export function createChatGPTAgentRoutes(
       const balanceConnection = new Connection(balanceCheckRpc, 'confirmed');
       const publicKey = new PublicKey(walletData.publicKey);
       const { mint: usdcMintAddress, ata: ataPromise } = getUsdcMintAndAta(balanceCheckNetwork, publicKey);
-      const ata = await ataPromise; // Await the Promise<PublicKey>
+      let ata = await ataPromise; // Await the Promise<PublicKey>
       
       let usdcBalance = 0;
+      let resolvedTokenAccount = ata;
+      
+      // Try to get balance from derived ATA first
       try {
         const tokenAccount = await getAccount(balanceConnection, ata);
         usdcBalance = Number(tokenAccount.amount) / 1_000_000; // Convert from lamports
       } catch (error) {
-        // Token account doesn't exist or is empty
-        console.log('⚠️  USDC token account not found or empty');
+        // Token account doesn't exist at derived address, search by owner
+        console.log('⚠️  Derived USDC token account not found, searching by owner...');
+        try {
+          const parsed = await balanceConnection.getParsedTokenAccountsByOwner(publicKey, { 
+            mint: usdcMintAddress 
+          });
+          for (const { pubkey, account } of parsed.value) {
+            const info = account.data?.parsed?.info;
+            if (info?.mint === usdcMintAddress.toBase58()) {
+              const amt = info?.tokenAmount?.uiAmount ?? 0;
+              if (amt > 0) {
+                usdcBalance = amt;
+                resolvedTokenAccount = pubkey;
+                console.log(`✓ Found token account with balance: ${pubkey.toBase58()} (${amt} USDC)`);
+                break;
+              }
+            }
+          }
+        } catch (searchError) {
+          console.log('⚠️  Token account search failed:', searchError);
+        }
       }
 
       // 1. CHECK POLICY FIRST (agent-to-agent transaction)
@@ -335,11 +357,11 @@ export function createChatGPTAgentRoutes(
           message: `Insufficient USDC balance. You need ${priceUsd} USDC but have ${usdcBalance.toFixed(2)} USDC.`,
           wallet: {
             publicKey: walletData.publicKey,
-            tokenAccount: ata.toBase58(),
+            tokenAccount: resolvedTokenAccount.toBase58(),
             currentBalance: usdcBalance,
             requiredAmount: priceUsd,
-            fundingInstructions: `Send ${priceUsd} USDC to token account: ${ata.toBase58()}`,
-            solscanUrl: `https://solscan.io/account/${ata.toBase58()}${clusterParam}`,
+            fundingInstructions: `Send ${priceUsd} USDC to token account: ${resolvedTokenAccount.toBase58()}`,
+            solscanUrl: `https://solscan.io/account/${resolvedTokenAccount.toBase58()}${clusterParam}`,
           },
           service: {
             agent: agentId,
@@ -385,7 +407,8 @@ export function createChatGPTAgentRoutes(
       const connection = new Connection(rpcUrl, 'confirmed');
       const buyerKeypair = Keypair.fromSecretKey(Uint8Array.from(walletData.secretKey));
       const usdcMint = new PublicKey(requirement.mint);
-      const buyerTokenAccount = await getAssociatedTokenAddress(usdcMint, buyerKeypair.publicKey);
+      // Use the resolved token account from balance check (handles non-standard ATAs)
+      const buyerTokenAccount = resolvedTokenAccount;
       
       // Parse seller's USDC account from 402 payment requirement
       const sellerTokenAccount = new PublicKey(requirement.payTo);
