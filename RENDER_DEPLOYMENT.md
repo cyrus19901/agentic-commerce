@@ -1,223 +1,177 @@
-# Deploy to Render
+# Render Deployment Guide
 
-This guide will walk you through deploying the Agentic Commerce API to Render.
+## 🚀 Deploy Latest Changes
 
-## Prerequisites
+### 1. Update Render Service
 
-1. **Render Account**: Sign up at [render.com](https://render.com)
-2. **GitHub Repository**: Push your code to GitHub
-3. **Stripe Account** (for payments): Get your API keys from [stripe.com/dashboard](https://dashboard.stripe.com/apikeys)
+Go to your Render dashboard:
+1. Navigate to your service (agentic-commerce)
+2. Go to **Settings** → **Build & Deploy**
+3. Change branch from `main` to `feat/a2a` (or merge feat/a2a to main first)
+4. Click **Manual Deploy** → **Deploy latest commit**
 
-## Step 1: Push to GitHub
+### 2. Verify Database Setup
+
+After deployment completes, verify the database has all policies and agents:
 
 ```bash
-cd /Users/cyrus19901/Repository/agentic-commerce
-git add .
-git commit -m "Prepare for Render deployment"
-git push origin main
+# Check Render logs for database setup
+# Look for lines like:
+# ✓ Database setup complete
+# ✓ Seeded 4 agents
+# ✓ Seeded 7 policies
 ```
 
-## Step 2: Create New Web Service on Render
+### 3. Manual Database Reset (if needed)
 
-1. Go to [Render Dashboard](https://dashboard.render.com/)
-2. Click **"New +"** → **"Web Service"**
-3. Connect your GitHub repository: `agentic-commerce`
-4. Render will automatically detect the `render.yaml` file
+If policies are missing, run the database setup script:
 
-## Step 3: Configure Environment Variables
-
-Render will automatically set most variables from `render.yaml`, but you need to manually add these sensitive keys:
-
-### In Render Dashboard → Environment Tab:
-
-1. **STRIPE_SECRET_KEY**
-   - Value: `sk_test_...` (from [Stripe Dashboard](https://dashboard.stripe.com/test/apikeys))
-   - For production: use `sk_live_...`
-
-2. **STRIPE_PUBLISHABLE_KEY**
-   - Value: `pk_test_...` (from Stripe Dashboard)
-   - For production: use `pk_live_...`
-
-3. **SOLANA_RPC_MAINNET** (Optional, only if using mainnet)
-   - Value: Your Alchemy or QuickNode mainnet RPC URL
-   - Example: `https://solana-mainnet.g.alchemy.com/v2/YOUR_KEY`
-
-### Auto-configured by render.yaml:
-- ✅ `PORT=3000`
-- ✅ `NODE_ENV=production`
-- ✅ `DATABASE_URL=/data/shopping.db`
-- ✅ `JWT_SECRET` (auto-generated)
-- ✅ `SOLANA_CLUSTER=devnet`
-- ✅ `SOLANA_RPC_DEVNET` (Alchemy devnet)
-- ✅ `USE_MOCK_PAYMENTS=false`
-
-## Step 4: Update API_URL After Deployment
-
-1. After deployment completes, Render will give you a URL like:
-   ```
-   https://agentic-commerce-api.onrender.com
-   ```
-
-2. Go back to **Environment** tab and update:
-   - Key: `API_URL`
-   - Value: `https://agentic-commerce-api.onrender.com` (your actual URL)
-
-3. Click **"Manual Deploy"** → **"Clear build cache & deploy"**
-
-## Step 5: Initialize Database
-
-Once deployed, the database will be automatically initialized on first startup via the `docker-entrypoint.sh` script.
-
-To verify:
+**Option A: Via Render Shell**
+1. Go to your Render service dashboard
+2. Click **Shell** tab
+3. Run:
 ```bash
-# Check logs in Render Dashboard
-# You should see: "✅ Database setup complete!"
+cd /app
+node packages/database/src/setup.js
 ```
 
-## Step 6: Create a Test User
+**Option B: Via API Call**
+```bash
+curl -X POST https://your-render-url.onrender.com/api/admin/reset-database
+```
 
-Use the deployed API to create a test user:
+### 4. Test Endpoints
+
+Once deployed, test with your Render URL:
 
 ```bash
-curl -X POST https://agentic-commerce-api.onrender.com/api/auth/create-user \
+# Replace YOUR_RENDER_URL with your actual URL
+export RENDER_URL="https://your-service.onrender.com"
+
+# 1. Health check
+curl $RENDER_URL/health
+
+# 2. List agents
+curl "$RENDER_URL/api/chatgpt-agent/agents" \
+  -H "User-Email: test@render.com"
+
+# 3. Create test user
+curl "$RENDER_URL/api/auth/create-user" \
   -H "Content-Type: application/json" \
   -d '{
-    "email": "your-email@example.com",
-    "name": "Test User"
+    "email": "test@render.com",
+    "name": "Render Test User"
+  }'
+
+# 4. Get wallet info
+curl "$RENDER_URL/api/chatgpt-agent/wallet" \
+  -H "Content-Type: application/json" \
+  -d '{"user_email": "test@render.com"}'
+
+# 5. Test agent service request (will fail with INSUFFICIENT_FUNDS until funded)
+curl "$RENDER_URL/api/chatgpt-agent/request-service" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_email": "test@render.com",
+    "agentId": "agent://apify.com/web-scraper/v1",
+    "serviceType": "data-scraping",
+    "parameters": {
+      "url": "https://example.com",
+      "extractFields": ["title"]
+    }
   }'
 ```
 
-**Save the token from the response!**
+### 5. Update ChatGPT Schema
 
-## Step 7: Configure ChatGPT
+Update your ChatGPT Actions schema:
 
-1. Go to [ChatGPT GPT Builder](https://chat.openai.com/gpts/editor)
-2. Create or edit your GPT
-3. In **Actions** section:
-   - Import schema from: `docs/gpt-action-schema-seamless.yaml`
-   - Update the `servers` section with your Render URL:
-     ```yaml
-     servers:
-       - url: https://agentic-commerce-api.onrender.com
-         description: Production API on Render
-     ```
-4. In **Authentication**:
-   - Type: **API Key**
-   - Auth Type: **Bearer**
-   - API Key: Use the token from Step 6
+1. Copy the contents of `docs/gpt-action-schema-seamless.yaml`
+2. Update the `servers` section with your Render URL:
+   ```yaml
+   servers:
+     - url: https://your-service.onrender.com
+       description: Agentic Commerce Platform on Render
+   ```
+3. In ChatGPT:
+   - Go to your GPT settings
+   - Click **Actions**
+   - Paste the updated schema
+   - Set **Authentication** to **None**
+   - Click **Save**
 
-## Architecture on Render
+### 6. Verify Policies in Render
 
-```
-┌─────────────────────────────────────┐
-│   Render Web Service                │
-│   (Docker Container)                │
-│                                     │
-│   ┌─────────────────────────────┐  │
-│   │  Node.js API (Port 3000)    │  │
-│   │  - Express Server           │  │
-│   │  - Policy Engine            │  │
-│   │  - Stripe Integration       │  │
-│   │  - Solana Wallet Manager    │  │
-│   └─────────────────────────────┘  │
-│                                     │
-│   ┌─────────────────────────────┐  │
-│   │  Persistent Disk (/data)    │  │
-│   │  - shopping.db (SQLite)     │  │
-│   │  - User wallets             │  │
-│   │  - Transaction history      │  │
-│   └─────────────────────────────┘  │
-└─────────────────────────────────────┘
-         ↑                    ↑
-         │                    │
-    ChatGPT              Solana Devnet
-    Actions              (via Alchemy RPC)
-```
-
-## Important Notes
-
-### Database Persistence
-- Your SQLite database is stored on a **persistent disk** at `/data`
-- Data survives deployments and restarts
-- Disk size: 1GB (configurable in `render.yaml`)
-
-### Free Tier Limitations
-- **Spin-down after 15 minutes** of inactivity
-- First request after spin-down takes ~30-60 seconds (cold start)
-- **750 hours/month** free compute time
-
-### Production Recommendations
-1. **Upgrade to Paid Plan** ($7/month) for:
-   - No spin-down
-   - Faster builds
-   - Better performance
-
-2. **Use Mainnet for Real Payments**:
-   - Set `SOLANA_CLUSTER=mainnet-beta`
-   - Add `SOLANA_RPC_MAINNET` with production RPC
-   - Use Stripe live keys (`sk_live_...`)
-
-3. **Set up Monitoring**:
-   - Enable Render's built-in logging
-   - Set up health check alerts
-
-## Troubleshooting
-
-### Database not initializing?
-Check logs in Render Dashboard. The entrypoint script should show:
-```
-🔧 Setting up database...
-✅ Database setup complete!
-```
-
-### Cold starts taking too long?
-- Upgrade to paid plan to eliminate spin-down
-- Or keep service warm with a scheduled ping (using cron-job.org)
-
-### Stripe webhooks not working?
-- Configure webhook endpoint in Stripe Dashboard:
-  ```
-  https://your-app.onrender.com/api/stripe/webhook
-  ```
-
-### Need to reset database?
-Delete the persistent disk and redeploy (⚠️ destroys all data)
-
-## Testing Deployment
+Check that all policies are created:
 
 ```bash
-# 1. Health check
-curl https://agentic-commerce-api.onrender.com/health
+# List all policies
+curl "$RENDER_URL/api/admin/policies"
 
-# 2. List agents
-curl https://agentic-commerce-api.onrender.com/api/registry/agents
-
-# 3. Test with ChatGPT
-"Show me my wallet balance"
+# Expected policies:
+# - policy-agent-budget-001 (Monthly spending limit)
+# - policy-agent-service-002 (Service type restrictions)
+# - policy-agent-recipient-003 (Recipient blocklist)
+# - policy-agent-approval-004 (Approval threshold)
+# - policy-stripe-merchant-001 (Merchant spending limit)
+# - policy-stripe-category-002 (Category restrictions)
+# - policy-stripe-approval-003 (Approval threshold)
 ```
 
-## Updating Your Deployment
+## 🔍 Troubleshooting
 
+### Issue: "No policies configured for agent-to-agent transactions"
+
+**Solution:**
 ```bash
-# Push changes to GitHub
-git add .
-git commit -m "Update feature"
-git push origin main
-
-# Render will auto-deploy on push
-# Or trigger manually in Render Dashboard
+# Reset database via Render Shell
+cd /app
+node packages/database/src/setup.js
 ```
 
-## Cost Estimate
+### Issue: Database file not persisting
 
-- **Free Tier**: $0/month (with spin-down)
-- **Starter Plan**: $7/month (no spin-down, better performance)
-- **Additional costs**:
-  - Persistent disk: Included in plan
-  - Bandwidth: Included (100GB/month on free tier)
+**Solution:**
+1. Verify Render persistent disk is mounted at `/app/data`
+2. Check `DATABASE_PATH` env var is set to `/app/data/shopping.db`
+3. Restart service
 
-## Support
+### Issue: Wallet creation fails
 
-- [Render Documentation](https://render.com/docs)
-- [Render Community Forum](https://community.render.com)
-- Check logs in Render Dashboard for errors
+**Solution:**
+Check Render logs for Solana connection errors. Verify:
+- `SOLANA_CLUSTER=devnet` is set
+- `ALCHEMY_RPC_URL` is set correctly
+
+## 📝 Environment Variables on Render
+
+Make sure these are set:
+
+```
+DATABASE_PATH=/app/data/shopping.db
+SOLANA_CLUSTER=devnet
+ALCHEMY_RPC_URL=https://solana-devnet.g.alchemy.com/v2/YOUR_KEY
+JWT_SECRET=your-secret-key
+API_URL=https://your-service.onrender.com
+STRIPE_SECRET_KEY=sk_test_...
+```
+
+## ✅ Deployment Checklist
+
+- [ ] Pushed latest changes to `feat/a2a` branch
+- [ ] Deployed on Render (branch: feat/a2a)
+- [ ] Verified database setup in logs
+- [ ] All policies created (7 policies expected)
+- [ ] All agents seeded (4 agents expected)
+- [ ] Test user created successfully
+- [ ] Wallet auto-created for test user
+- [ ] Updated ChatGPT schema with Render URL
+- [ ] Tested agent service request
+
+## 🎯 Next Steps
+
+After deployment is verified:
+1. Test in ChatGPT with Render URL
+2. Fund a test wallet for full end-to-end testing
+3. Monitor Render logs for any errors
+4. Once stable, merge `feat/a2a` to `main`
