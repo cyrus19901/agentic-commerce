@@ -352,7 +352,8 @@ for (const user of allUsers) {
 console.log('\n🤖 Seeding agents...');
 const timestamp = new Date().toISOString();
 // Use a single service wallet to collect all payments (simplifies testing)
-const SERVICE_WALLET_USDC_ACCOUNT = process.env.SERVICE_WALLET_USDC || 'Aj3Z8i5HQ1z9poYBfCicYXHCtfzry9ijcQyunPTaoG4g';
+// For testing, use the user's own ATA so payments go back to them
+const SERVICE_WALLET_USDC_ACCOUNT = process.env.SERVICE_WALLET_USDC || 'D8SWG8sHtTrZV39LMtZ86rWtjmZAj32pnedx6pp5ffC4';
 
 const agents = [
   {
