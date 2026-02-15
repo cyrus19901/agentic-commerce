@@ -195,12 +195,23 @@ export class PolicyService {
     // Budget check
     if (policy.type === 'budget') {
       hasMatchingCondition = true;
-      const spent = await this.db.getUserSpending(request.userId, policy.rules.period!);
-      if (spent + request.price > (policy.rules.maxAmount || 0)) {
-        return {
-          passed: false,
-          reason: `Would exceed ${policy.rules.period} budget of $${policy.rules.maxAmount}`,
-        };
+      // Skip budget aggregation for 'transaction' period (per-transaction limits handled elsewhere)
+      if (policy.rules.period !== 'transaction') {
+        const spent = await this.db.getUserSpending(request.userId, policy.rules.period!);
+        if (spent + request.price > (policy.rules.maxAmount || 0)) {
+          return {
+            passed: false,
+            reason: `Would exceed ${policy.rules.period} budget of $${policy.rules.maxAmount}`,
+          };
+        }
+      } else {
+        // Per-transaction limit
+        if (request.price > (policy.rules.maxAmount || Infinity)) {
+          return {
+            passed: false,
+            reason: `Exceeds per-transaction limit of $${policy.rules.maxAmount}`,
+          };
+        }
       }
     }
 

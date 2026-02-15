@@ -17,6 +17,7 @@ export type TransactionType = 'agent-to-merchant' | 'agent-to-agent' | 'all';
 export interface Policy {
   id: string;
   name: string;
+  description?: string; // Optional description for policy details
   type: 'budget' | 'transaction' | 'merchant' | 'category' | 'time' | 'agent' | 'purpose' | 'composite';
   enabled: boolean;
   priority: number;
@@ -27,10 +28,11 @@ export interface Policy {
     departments?: string[];
     timeRange?: { start: string; end: string };
     transactionType?: TransactionType[];
+    serviceType?: string[]; // For agent-to-agent: scraping, api-call, etc.
   };
   rules: {
     maxAmount?: number;
-    period?: 'daily' | 'weekly' | 'monthly';
+    period?: 'daily' | 'weekly' | 'monthly' | 'transaction';
     maxTransactionAmount?: number;
     allowedMerchants?: string[];
     blockedMerchants?: string[];
@@ -39,6 +41,7 @@ export interface Policy {
     // Time-based rules
     allowedTimeRanges?: Array<{ start: string; end: string }>; // HH:MM format
     allowedDaysOfWeek?: number[]; // 0-6, Sunday = 0
+    allowedDays?: number[]; // Alias for allowedDaysOfWeek
     // Agent-based rules
     allowedAgentNames?: string[];
     blockedAgentNames?: string[];
@@ -49,6 +52,8 @@ export interface Policy {
     // Purpose-based rules
     allowedPurposes?: string[];
     blockedPurposes?: string[];
+    // Agent-to-agent specific rules
+    perAgentDailyLimit?: number; // Daily spending limit per specific agent
     // Composite conditions (stored as JSON for complex rules)
     compositeConditions?: Array<{
       field: string;
