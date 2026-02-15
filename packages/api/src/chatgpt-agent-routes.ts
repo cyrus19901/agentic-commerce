@@ -280,40 +280,24 @@ export function createChatGPTAgentRoutes(
       const balanceConnection = new Connection(balanceCheckRpc, 'confirmed');
       const publicKey = new PublicKey(walletData.publicKey);
       const { mint: usdcMintAddress, ata: ataPromise } = getUsdcMintAndAta(balanceCheckNetwork, publicKey);
-      let ata = await ataPromise; // Await the Promise<PublicKey>
+      const ata = await ataPromise;
       
       let usdcBalance = 0;
       let resolvedTokenAccount = ata;
       
-      // Try to get balance from derived ATA first
+      // Try standard ATA first
+      console.log(`🔍 Checking balance for ATA: ${ata.toBase58()}`);
       try {
         const tokenAccount = await getAccount(balanceConnection, ata);
-        usdcBalance = Number(tokenAccount.amount) / 1_000_000; // Convert from lamports
-        console.log(`✓ Found balance at derived ATA: ${ata.toBase58()} (${usdcBalance} USDC)`);
-      } catch (error) {
-        // Token account doesn't exist at derived address, use same fallback as wallet endpoint
-        console.log(`⚠️  Derived USDC token account not found (${ata.toBase58()}), searching by derived ATA as owner...`);
-        try {
-          // Search by derived ATA as owner (matches wallet endpoint logic)
-          const parsed = await balanceConnection.getParsedTokenAccountsByOwner(ata, { 
-            programId: TOKEN_PROGRAM_ID 
-          });
-          console.log(`🔍 Found ${parsed.value.length} token accounts owned by derived ATA`);
-          for (const { pubkey, account } of parsed.value) {
-            const info = account.data?.parsed?.info;
-            const amt = info?.tokenAmount?.uiAmount ?? 0;
-            console.log(`  - Token account: ${pubkey.toBase58()}, mint: ${info?.mint}, balance: ${amt}`);
-            if (info?.mint === usdcMintAddress.toBase58() && amt > 0) {
-              usdcBalance = amt;
-              resolvedTokenAccount = pubkey;
-              console.log(`✓ Found token account with balance: ${pubkey.toBase58()} (${amt} USDC)`);
-              break;
-            }
-          }
-        } catch (searchError: any) {
-          console.log('⚠️  Token account search failed:', searchError?.message || searchError);
-        }
+        usdcBalance = Number(tokenAccount.amount) / 1_000_000;
+        console.log(`✓ ATA exists, balance: ${usdcBalance} USDC`);
+      } catch (error: any) {
+        console.log(`⚠️  Standard ATA not found: ${error?.message}`);
+        console.log(`⚠️  Standard ATA (${ata.toBase58()}) doesn't exist on-chain yet.`);
+        console.log(`⚠️  To create it, you need ~0.002 SOL for rent. Fund your wallet with SOL first.`);
+        // Don't search for nested structures - they can't be used for payments
       }
+      console.log(`💰 Final balance check: ${usdcBalance} USDC at ${resolvedTokenAccount.toBase58()}`);
 
       // 1. CHECK POLICY FIRST (agent-to-agent transaction)
       const policyCheck = await policyService.checkPurchase({
@@ -362,7 +346,13 @@ export function createChatGPTAgentRoutes(
             tokenAccount: resolvedTokenAccount.toBase58(),
             currentBalance: usdcBalance,
             requiredAmount: priceUsd,
-            fundingInstructions: `Send ${priceUsd} USDC to token account: ${resolvedTokenAccount.toBase58()}`,
+            fundingInstructions: {
+              step1: `Fund your SOL wallet with ~0.01 SOL for transaction fees and rent: ${walletData.publicKey}`,
+              step2: `The USDC token account (ATA) will be auto-created on first USDC transfer`,
+              step3: `Then send ${priceUsd} USDC to your wallet (ATA will be derived automatically)`,
+              ataAddress: resolvedTokenAccount.toBase58(),
+              note: 'The ATA (Associated Token Account) is deterministically derived from your wallet address. Most wallets handle this automatically.'
+            },
             solscanUrl: `https://solscan.io/account/${resolvedTokenAccount.toBase58()}${clusterParam}`,
           },
           service: {
