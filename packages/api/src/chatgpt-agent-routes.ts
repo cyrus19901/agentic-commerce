@@ -289,27 +289,29 @@ export function createChatGPTAgentRoutes(
       try {
         const tokenAccount = await getAccount(balanceConnection, ata);
         usdcBalance = Number(tokenAccount.amount) / 1_000_000; // Convert from lamports
+        console.log(`✓ Found balance at derived ATA: ${ata.toBase58()} (${usdcBalance} USDC)`);
       } catch (error) {
-        // Token account doesn't exist at derived address, search by owner
-        console.log('⚠️  Derived USDC token account not found, searching by owner...');
+        // Token account doesn't exist at derived address, use same fallback as wallet endpoint
+        console.log(`⚠️  Derived USDC token account not found (${ata.toBase58()}), searching by derived ATA as owner...`);
         try {
-          const parsed = await balanceConnection.getParsedTokenAccountsByOwner(publicKey, { 
-            mint: usdcMintAddress 
+          // Search by derived ATA as owner (matches wallet endpoint logic)
+          const parsed = await balanceConnection.getParsedTokenAccountsByOwner(ata, { 
+            programId: TOKEN_PROGRAM_ID 
           });
+          console.log(`🔍 Found ${parsed.value.length} token accounts owned by derived ATA`);
           for (const { pubkey, account } of parsed.value) {
             const info = account.data?.parsed?.info;
-            if (info?.mint === usdcMintAddress.toBase58()) {
-              const amt = info?.tokenAmount?.uiAmount ?? 0;
-              if (amt > 0) {
-                usdcBalance = amt;
-                resolvedTokenAccount = pubkey;
-                console.log(`✓ Found token account with balance: ${pubkey.toBase58()} (${amt} USDC)`);
-                break;
-              }
+            const amt = info?.tokenAmount?.uiAmount ?? 0;
+            console.log(`  - Token account: ${pubkey.toBase58()}, mint: ${info?.mint}, balance: ${amt}`);
+            if (info?.mint === usdcMintAddress.toBase58() && amt > 0) {
+              usdcBalance = amt;
+              resolvedTokenAccount = pubkey;
+              console.log(`✓ Found token account with balance: ${pubkey.toBase58()} (${amt} USDC)`);
+              break;
             }
           }
-        } catch (searchError) {
-          console.log('⚠️  Token account search failed:', searchError);
+        } catch (searchError: any) {
+          console.log('⚠️  Token account search failed:', searchError?.message || searchError);
         }
       }
 
