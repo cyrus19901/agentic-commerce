@@ -292,10 +292,27 @@ export function createChatGPTAgentRoutes(
         usdcBalance = Number(tokenAccount.amount) / 1_000_000;
         console.log(`✓ ATA exists, balance: ${usdcBalance} USDC`);
       } catch (error: any) {
-        console.log(`⚠️  Standard ATA not found: ${error?.message}`);
-        console.log(`⚠️  Standard ATA (${ata.toBase58()}) doesn't exist on-chain yet.`);
-        console.log(`⚠️  To create it, you need ~0.002 SOL for rent. Fund your wallet with SOL first.`);
-        // Don't search for nested structures - they can't be used for payments
+        console.log(`⚠️  Standard ATA check failed: ${error?.message}`);
+        // Search for token accounts owned BY the derived ATA (same as wallet endpoint)
+        try {
+          const parsed = await balanceConnection.getParsedTokenAccountsByOwner(ata, { programId: TOKEN_PROGRAM_ID });
+          console.log(`🔍 Found ${parsed.value.length} accounts owned by ATA`);
+          for (const { pubkey, account } of parsed.value) {
+            const info = account.data?.parsed?.info;
+            if (info?.mint === usdcMintAddress.toBase58()) {
+              const amt = info?.tokenAmount?.uiAmount ?? 0;
+              console.log(`  - ${pubkey.toBase58()}: ${amt} USDC`);
+              if (amt > 0) {
+                usdcBalance = amt;
+                resolvedTokenAccount = pubkey;
+                console.log(`✓ Using token account: ${pubkey.toBase58()}`);
+                break;
+              }
+            }
+          }
+        } catch (searchError: any) {
+          console.log(`⚠️  Search failed: ${searchError?.message}`);
+        }
       }
       console.log(`💰 Final balance check: ${usdcBalance} USDC at ${resolvedTokenAccount.toBase58()}`);
 
