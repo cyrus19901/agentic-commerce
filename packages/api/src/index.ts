@@ -178,7 +178,7 @@ app.get('/debug/env', (req, res) => {
   res.json({
     NODE_ENV: process.env.NODE_ENV,
     DATABASE_URL: process.env.DATABASE_URL,
-    FRONTEND_URL: process.env.FRONTEND_URL || '⚠️ NOT SET (defaults to http://localhost:3000)',
+    FRONTEND_URL: process.env.FRONTEND_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:3000',
     API_URL: process.env.API_URL || '⚠️ NOT SET',
     USE_MOCK_PAYMENTS: process.env.USE_MOCK_PAYMENTS || '⚠️ NOT SET',
     STRIPE_KEY_SET: !!process.env.STRIPE_SECRET_KEY ? '✅ Yes' : '❌ No',
