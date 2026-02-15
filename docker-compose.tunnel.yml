@@ -40,7 +40,8 @@ services:
       
       # Agent Configuration
       - AGENT_ID=${AGENT_ID:-agent://agentic-commerce/v1}
-      - USDC_TOKEN_ACCOUNT=${USDC_TOKEN_ACCOUNT:-Aj3Z8i5HQ1z9poYBfCicYXHCtfzry9ijcQyunPTaoG4g}
+      # Main SOL wallet address (we'll derive the USDC ATA from this)
+      - USDC_TOKEN_ACCOUNT=${USDC_TOKEN_ACCOUNT:-6kzEhPaeXQBcCJwGN8xK3VSyfUpVPU39gdw1KAj9ymru}
       - SOLANA_PUBKEY=${SOLANA_PUBKEY:-2ZqWhcwYPqXKdtyCHSazqwp1F1ducfKvxLAbz95A8jkk}
       
       # Facilitator

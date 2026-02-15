@@ -4,6 +4,8 @@
  */
 
 import { Router } from 'express';
+import { PublicKey } from '@solana/web3.js';
+import { getAssociatedTokenAddressSync } from '@solana/spl-token';
 import { DB } from '@agentic-commerce/database';
 import { PolicyService } from '@agentic-commerce/core';
 import { 
@@ -41,19 +43,26 @@ export function createAgentRoutes(
 
       // Get seller agent configuration
       const sellerAgentId = process.env.AGENT_ID || 'seller-agent-default';
-      const usdcTokenAccount = process.env.USDC_TOKEN_ACCOUNT;
+      const sellerMainWallet = process.env.USDC_TOKEN_ACCOUNT; // Main SOL wallet address
       const isMainnet = process.env.SOLANA_CLUSTER === 'mainnet-beta';
       const usdcMint = process.env.USDC_MINT
         || (isMainnet ? (process.env.USDC_MINT_MAINNET || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v') : (process.env.USDC_MINT_DEVNET || 'Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr'));
       const network = isMainnet ? 'solana:mainnet' : 'solana:devnet';
       const facilitatorUrl = process.env.FACILITATOR_URL || `${process.env.API_URL || 'http://localhost:3000'}/api/facilitator/verify`;
 
-      if (!usdcTokenAccount) {
+      if (!sellerMainWallet) {
         return res.status(500).json({ 
           error: 'AGENT_NOT_CONFIGURED',
-          message: 'Seller agent USDC account not configured'
+          message: 'Seller wallet not configured. Set USDC_TOKEN_ACCOUNT env var to your main SOL wallet address.'
         });
       }
+
+      // Derive the seller's USDC ATA from their main wallet
+      const sellerWalletPubkey = new PublicKey(sellerMainWallet);
+      const usdcTokenAccount = getAssociatedTokenAddressSync(
+        new PublicKey(usdcMint),
+        sellerWalletPubkey
+      ).toBase58();
 
       // Check if payment signature provided
       const paymentSigHeader = req.headers['payment-signature'] as string | undefined;
@@ -110,8 +119,10 @@ export function createAgentRoutes(
 
       // Calculate price for verification
       const price = calculateServicePrice(serviceType, body);
+      console.log(`💵 Calculated price: ${price} lamports (${price/1_000_000} USDC)`);
 
       // Verify payment via facilitator
+      console.log(`🔍 Verifying payment proof with facilitator...`);
       const verification = await facilitatorService.verifyPayment({
         proof,
         expected: {
@@ -124,12 +135,14 @@ export function createAgentRoutes(
       });
 
       if (!verification.ok) {
+        console.error(`❌ Payment verification failed: ${verification.error}`);
         return res.status(402).json({
           error: 'PAYMENT_INVALID',
           detail: verification.error,
         });
       }
 
+      console.log(`✅ Payment verified successfully!`);
       // Payment verified! Record the transaction
       await db.recordPurchaseAttempt({
         userId: tokenUser,
