@@ -350,55 +350,85 @@ for (const user of allUsers) {
 
 // Seed agents for agent-to-agent transactions
 console.log('\n🤖 Seeding agents...');
+const timestamp = new Date().toISOString();
 const agents = [
   {
+    id: 'agent-apify-001',
     agentId: 'agent://apify.com/web-scraper/v1',
     name: 'Apify Web Scraper',
-    agentType: 'scraper',
     services: JSON.stringify(['data-scraping', 'web-extraction', 'crawling']),
     serviceDescription: 'Enterprise web scraping and data extraction service',
     baseUrl: 'https://api.apify.com',
-    publicKey: 'ApifyScraperPublicKey123',
+    acceptedCurrencies: JSON.stringify(['USDC']),
+    usdcTokenAccount: null,
+    solanaPubkey: 'ApifyScraperPubKey1234567890',
     active: 1,
+    verified: 1,
+    ownerId: 'system',
+    metadata: JSON.stringify({ type: 'scraper', tier: 'enterprise' }),
   },
   {
+    id: 'agent-browse-002',
     agentId: 'agent://browse.ai/data-extractor/v1',
     name: 'Browse.ai',
-    agentType: 'scraper',
     services: JSON.stringify(['data-scraping', 'web-extraction', 'monitoring']),
     serviceDescription: 'No-code web extraction and monitoring platform',
     baseUrl: 'https://api.browse.ai',
-    publicKey: 'BrowseAiPublicKey456',
+    acceptedCurrencies: JSON.stringify(['USDC']),
+    usdcTokenAccount: null,
+    solanaPubkey: 'BrowseAiPubKey1234567890',
     active: 1,
+    verified: 1,
+    ownerId: 'system',
+    metadata: JSON.stringify({ type: 'scraper', tier: 'standard' }),
   },
   {
+    id: 'agent-rapid-003',
     agentId: 'agent://rapidapi.com/api-proxy/v1',
     name: 'RapidAPI',
-    agentType: 'api-gateway',
     services: JSON.stringify(['api-calling', 'data-integration', 'external-api']),
     serviceDescription: 'Universal API gateway with 40,000+ APIs',
     baseUrl: 'https://rapidapi.com',
-    publicKey: 'RapidAPIPublicKey789',
+    acceptedCurrencies: JSON.stringify(['USDC']),
+    usdcTokenAccount: null,
+    solanaPubkey: 'RapidAPIPubKey1234567890',
     active: 1,
+    verified: 1,
+    ownerId: 'system',
+    metadata: JSON.stringify({ type: 'api-gateway', apiCount: 40000 }),
   },
   {
+    id: 'agent-wolfram-004',
     agentId: 'agent://wolfram.com/compute-engine/v1',
     name: 'Wolfram Compute',
-    agentType: 'compute',
     services: JSON.stringify(['computation', 'data-analysis', 'analytics']),
     serviceDescription: 'Advanced computation and analytics engine',
     baseUrl: 'https://api.wolframalpha.com',
-    publicKey: 'WolframPublicKey321',
+    acceptedCurrencies: JSON.stringify(['USDC']),
+    usdcTokenAccount: null,
+    solanaPubkey: 'WolframPubKey1234567890',
     active: 1,
+    verified: 1,
+    ownerId: 'system',
+    metadata: JSON.stringify({ type: 'compute', tier: 'premium' }),
   },
 ];
 
 for (const agent of agents) {
   try {
     db.db.prepare(`
-      INSERT OR REPLACE INTO agents (agent_id, name, agent_type, services, service_description, base_url, public_key, active)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(agent.agentId, agent.name, agent.agentType, agent.services, agent.serviceDescription, agent.baseUrl, agent.publicKey, agent.active);
+      INSERT OR REPLACE INTO registered_agents (
+        id, agent_id, name, base_url, services, service_description, 
+        accepted_currencies, usdc_token_account, solana_pubkey, 
+        active, verified, owner_id, metadata, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      agent.id, agent.agentId, agent.name, agent.baseUrl, agent.services,
+      agent.serviceDescription, agent.acceptedCurrencies, agent.usdcTokenAccount,
+      agent.solanaPubkey, agent.active, agent.verified, agent.ownerId,
+      agent.metadata, timestamp, timestamp
+    );
     console.log(`✓ Seeded agent: ${agent.name}`);
   } catch (e) {
     console.log(`Error seeding agent ${agent.name}:`, e);
