@@ -311,6 +311,185 @@ const defaultPolicies: Policy[] = [
       fallbackAction: 'approve',
     },
   },
+
+  // ============================================
+  // AGENT-TO-AGENT SPECIFIC POLICIES
+  // ============================================
+
+  {
+    id: 'policy-21-a2a-scraper-limit',
+    name: 'A2A: Web Scraping Services - $5 Limit',
+    description: 'Restrict web scraping services to $5 per transaction',
+    type: 'transaction',
+    enabled: true,
+    priority: 80,
+    conditions: {
+      transactionType: ['agent-to-agent'],
+      serviceType: ['data-scraping', 'scrape', 'web-scraper'],
+    },
+    rules: {
+      maxTransactionAmount: 5,
+      fallbackAction: 'deny',
+    },
+  },
+
+  {
+    id: 'policy-22-a2a-api-require-approval',
+    name: 'A2A: API Services Require Approval',
+    description: 'All API calling services require manager approval',
+    type: 'transaction',
+    enabled: true,
+    priority: 75,
+    conditions: {
+      transactionType: ['agent-to-agent'],
+      serviceType: ['api-call', 'api-calling', 'external-api'],
+    },
+    rules: {
+      fallbackAction: 'require_approval',
+    },
+  },
+
+  {
+    id: 'policy-23-a2a-expensive-services-approval',
+    name: 'A2A: Services Over $2 Require Approval',
+    description: 'Agent services costing more than $2 need approval',
+    type: 'transaction',
+    enabled: true,
+    priority: 70,
+    conditions: {
+      transactionType: ['agent-to-agent'],
+    },
+    rules: {
+      maxTransactionAmount: 2,
+      fallbackAction: 'require_approval',
+    },
+  },
+
+  {
+    id: 'policy-24-a2a-block-specific-agents',
+    name: 'A2A: Block Untrusted Agents',
+    description: 'Block specific agents from receiving payments',
+    type: 'agent',
+    enabled: true,
+    priority: 90,
+    conditions: {
+      transactionType: ['agent-to-agent'],
+    },
+    rules: {
+      blockedRecipientAgents: [
+        'agent://untrusted.com/service',
+        'agent://suspicious-bot.io/scraper',
+        'agent://blocked-agent.xyz',
+      ],
+      fallbackAction: 'deny',
+    },
+  },
+
+  {
+    id: 'policy-25-a2a-whitelist-agents',
+    name: 'A2A: Only Allow Trusted Agents',
+    description: 'Only allow payments to pre-approved trusted agents',
+    type: 'agent',
+    enabled: false, // Disabled by default - too restrictive
+    priority: 95,
+    conditions: {
+      transactionType: ['agent-to-agent'],
+    },
+    rules: {
+      allowedRecipientAgents: [
+        'agent://apify.com/web-scraper/v1',
+        'agent://browse.ai/scraper',
+        'agent://rapidapi.com/api-caller',
+      ],
+      fallbackAction: 'deny',
+    },
+  },
+
+  {
+    id: 'policy-26-a2a-data-analysis-budget',
+    name: 'A2A: Data Analysis Monthly Budget - $50',
+    description: 'Limit data analysis services to $50 per month',
+    type: 'budget',
+    enabled: true,
+    priority: 65,
+    conditions: {
+      transactionType: ['agent-to-agent'],
+      serviceType: ['data-analysis', 'analytics', 'compute'],
+    },
+    rules: {
+      maxAmount: 50,
+      period: 'monthly',
+      fallbackAction: 'deny',
+    },
+  },
+
+  {
+    id: 'policy-27-a2a-scraping-daily-limit',
+    name: 'A2A: Scraping Daily Limit - $10',
+    description: 'Limit web scraping to $10 per day to prevent abuse',
+    type: 'budget',
+    enabled: true,
+    priority: 60,
+    conditions: {
+      transactionType: ['agent-to-agent'],
+      serviceType: ['data-scraping', 'scrape', 'web-scraper'],
+    },
+    rules: {
+      maxAmount: 10,
+      period: 'daily',
+      fallbackAction: 'deny',
+    },
+  },
+
+  {
+    id: 'policy-28-a2a-auto-approve-cheap',
+    name: 'A2A: Auto-Approve Services Under $0.50',
+    description: 'Automatically approve cheap agent services',
+    type: 'transaction',
+    enabled: true,
+    priority: 5,
+    conditions: {
+      transactionType: ['agent-to-agent'],
+    },
+    rules: {
+      compositeConditions: [
+        { field: 'amount', operator: 'less_than_or_equal', value: 0.5 },
+      ],
+      fallbackAction: 'approve',
+    },
+  },
+
+  {
+    id: 'policy-29-a2a-per-agent-daily-limit',
+    name: 'A2A: $5 Daily Limit Per Agent',
+    description: 'Limit spending to $5 per day per specific agent',
+    type: 'composite',
+    enabled: true,
+    priority: 55,
+    conditions: {
+      transactionType: ['agent-to-agent'],
+    },
+    rules: {
+      perAgentDailyLimit: 5,
+      fallbackAction: 'require_approval',
+    },
+  },
+
+  {
+    id: 'policy-30-a2a-weekend-approval',
+    name: 'A2A: Weekend Services Require Approval',
+    description: 'Agent services on weekends need manager approval',
+    type: 'time',
+    enabled: false, // Disabled by default
+    priority: 50,
+    conditions: {
+      transactionType: ['agent-to-agent'],
+    },
+    rules: {
+      allowedDays: [1, 2, 3, 4, 5], // Monday-Friday
+      fallbackAction: 'require_approval',
+    },
+  },
 ];
 
 (async () => {
