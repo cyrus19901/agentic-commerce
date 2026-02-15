@@ -351,6 +351,9 @@ for (const user of allUsers) {
 // Seed agents for agent-to-agent transactions
 console.log('\n🤖 Seeding agents...');
 const timestamp = new Date().toISOString();
+// Use a single service wallet to collect all payments (simplifies testing)
+const SERVICE_WALLET_USDC_ACCOUNT = process.env.SERVICE_WALLET_USDC || 'Aj3Z8i5HQ1z9poYBfCicYXHCtfzry9ijcQyunPTaoG4g';
+
 const agents = [
   {
     id: 'agent-apify-001',
@@ -360,7 +363,7 @@ const agents = [
     serviceDescription: 'Enterprise web scraping and data extraction service',
     baseUrl: 'https://api.apify.com',
     acceptedCurrencies: JSON.stringify(['USDC']),
-    usdcTokenAccount: null,
+    usdcTokenAccount: SERVICE_WALLET_USDC_ACCOUNT,
     solanaPubkey: 'ApifyScraperPubKey1234567890',
     active: 1,
     verified: 1,
@@ -375,7 +378,7 @@ const agents = [
     serviceDescription: 'No-code web extraction and monitoring platform',
     baseUrl: 'https://api.browse.ai',
     acceptedCurrencies: JSON.stringify(['USDC']),
-    usdcTokenAccount: null,
+    usdcTokenAccount: SERVICE_WALLET_USDC_ACCOUNT,
     solanaPubkey: 'BrowseAiPubKey1234567890',
     active: 1,
     verified: 1,
@@ -390,7 +393,7 @@ const agents = [
     serviceDescription: 'Universal API gateway with 40,000+ APIs',
     baseUrl: 'https://rapidapi.com',
     acceptedCurrencies: JSON.stringify(['USDC']),
-    usdcTokenAccount: null,
+    usdcTokenAccount: SERVICE_WALLET_USDC_ACCOUNT,
     solanaPubkey: 'RapidAPIPubKey1234567890',
     active: 1,
     verified: 1,
@@ -405,7 +408,7 @@ const agents = [
     serviceDescription: 'Advanced computation and analytics engine',
     baseUrl: 'https://api.wolframalpha.com',
     acceptedCurrencies: JSON.stringify(['USDC']),
-    usdcTokenAccount: null,
+    usdcTokenAccount: SERVICE_WALLET_USDC_ACCOUNT,
     solanaPubkey: 'WolframPubKey1234567890',
     active: 1,
     verified: 1,
