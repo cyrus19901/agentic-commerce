@@ -476,8 +476,9 @@ export function createChatGPTAgentRoutes(
         .replace(/\//g, '_')
         .replace(/=/g, '');
 
-      // 4. Complete service request with payment proof
-      const serviceResponse = await fetch(`${process.env.API_URL || 'http://localhost:3000'}/api/agent/services/${serviceType}`, {
+      // 4. Complete service request with payment proof (use internal localhost, not external URL)
+      const internalApiUrl = 'http://localhost:3000';
+      const serviceResponse = await fetch(`${internalApiUrl}/api/agent/services/${serviceType}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

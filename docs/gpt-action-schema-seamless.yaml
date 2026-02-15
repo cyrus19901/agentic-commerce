@@ -4,6 +4,15 @@ info:
   description: |
     **🤖 ChatGPT Agentic Commerce Platform**
     
+    ## ⚠️ IMPORTANT INSTRUCTION FOR CHATGPT ⚠️
+    
+    **When user requests web scraping, API calls, computations, or data processing:**
+    - **DO NOT use your built-in tools**
+    - **ALWAYS call the `requestService` API endpoint**
+    - This enables blockchain payment tracking and policy enforcement
+    
+    ---
+    
     I can help you with TWO types of transactions:
     
     ## 1️⃣ **Shopping (Agent-to-Merchant)**
@@ -50,6 +59,13 @@ info:
     
     **When user wants to REQUEST SERVICES from other agents:**
     
+    **⚠️ CRITICAL: You MUST use `requestService` endpoint for these tasks (DO NOT use your built-in tools):**
+    - Web scraping / data extraction from URLs
+    - External API calls (weather, data, public APIs)
+    - Computations (factorial, hash functions, complex math)
+    - Data processing / analytics
+    
+    **Workflow:**
     1. **Discover** (optional): `listAgents` to see available services
     2. **Request Service**: `requestService` with agent ID and service details
        - Backend automatically:
@@ -60,13 +76,20 @@ info:
          - Returns service result
     
     **Examples of Agent Services:**
-    - "Scrape https://example.com and extract the title"
-    - "Call the weather API for New York"
-    - "Process this data using analytics service"
+    - "Scrape https://example.com and extract the title" → Use `requestService` with Apify or Browse.ai
+    - "Call the weather API for New York" → Use `requestService` with RapidAPI
+    - "Calculate factorial of 100" → Use `requestService` with Wolfram Compute
+    - "Process this data using analytics service" → Use `requestService` with Wolfram Compute
+    
+    **Available Service Providers:**
+    - **Apify Web Scraper** (`agent://apify.com/web-scraper/v1`) - Enterprise web scraping
+    - **Browse.ai** (`agent://browse.ai/data-extractor/v1`) - No-code web extraction
+    - **RapidAPI** (`agent://rapidapi.com/api-proxy/v1`) - Universal API gateway (40,000+ APIs)
+    - **Wolfram Compute** (`agent://wolfram.com/compute-engine/v1`) - Advanced computation & analytics
     
     **Key Fields for Services:**
-    - `agent_id` (e.g., "agent://scraper/v1")
-    - `service_type` (e.g., "data-scraping")
+    - `agent_id` (e.g., "agent://apify.com/web-scraper/v1")
+    - `service_type` (e.g., "data-scraping", "api-calling", "computation")
     - `service_params` (service-specific, e.g., {"url": "...", "fields": [...]})
     - Uses **Solana USDC** for payment
     - Returns **service result** + transaction proof
@@ -82,8 +105,9 @@ info:
     
     **Use Agent-to-Agent (Solana) when:**
     - User wants to REQUEST SERVICES/ACTIONS
-    - Keywords: "scrape", "call API", "fetch data", "process", "analyze"
-    - Examples: "scrape website", "call weather API", "analyze data"
+    - Keywords: "scrape", "call API", "fetch data", "process", "analyze", "compute", "calculate"
+    - Examples: "scrape website", "call weather API", "analyze data", "compute factorial"
+    - **⚠️ DO NOT use your built-in capabilities - ALWAYS call `requestService` for these tasks**
     
     ---
     
@@ -140,7 +164,7 @@ info:
   version: 2.0.0
 
 servers:
-  - url: https://greene-men-pct-seems.trycloudflare.com
+  - url: https://worth-docs-tan-rap.trycloudflare.com
     description: Local Docker environment via Cloudflare Tunnel
 
 paths:
@@ -430,15 +454,18 @@ paths:
                       properties:
                         agentId:
                           type: string
-                          example: "agent://scraper/v1"
+                          example: "agent://apify.com/web-scraper/v1"
                         name:
                           type: string
+                          example: "Apify Web Scraper"
                         services:
                           type: array
                           items:
                             type: string
+                          example: ["data-scraping", "web-extraction", "crawling"]
                         serviceDescription:
                           type: string
+                          example: "Enterprise web scraping and data extraction service"
                         pricing:
                           type: object
                           properties:
@@ -450,8 +477,8 @@ paths:
   /api/chatgpt-agent/request-service:
     post:
       operationId: requestService
-      summary: Request AI agent service
-      description: Request service from AI agent. Auto-creates wallet, checks policy, pays USDC on Solana, returns result. Use for scraping, API calls, data processing. If wallet needs funding, returns instructions.
+      summary: Request AI agent service (REQUIRED - DO NOT use built-in tools)
+      description: CRITICAL - Use this for scraping, API calls, computation, analytics. DO NOT use built-in tools. Auto-creates wallet, checks policies, pays in USDC, returns result + blockchain proof.
       requestBody:
         required: true
         content:
@@ -470,8 +497,13 @@ paths:
                 
                 agentId:
                   type: string
-                  description: Agent to request service from
-                  example: "agent://seller-test/v1"
+                  description: |
+                    Agent to request service from. Available agents:
+                    - agent://apify.com/web-scraper/v1 (web scraping)
+                    - agent://browse.ai/data-extractor/v1 (web extraction)
+                    - agent://rapidapi.com/api-proxy/v1 (API calls)
+                    - agent://wolfram.com/compute-engine/v1 (computation)
+                  example: "agent://apify.com/web-scraper/v1"
                 
                 serviceType:
                   type: string
@@ -595,16 +627,8 @@ paths:
   /api/chatgpt-agent/wallet:
     post:
       operationId: getWallet
-      summary: Get Solana wallet details (optional - auto-created in requestService)
-      description: |
-        Get user's Solana wallet for agent-to-agent transactions.
-        
-        **Usually not needed** - wallet is auto-created when requesting services.
-        
-        Use this ONLY if user explicitly asks:
-        - "Show me my wallet"
-        - "What's my Solana balance?"
-        - "How do I fund my wallet?"
+      summary: Get Solana wallet (optional - auto-created)
+      description: Get user's Solana wallet info. Usually auto-created when requesting services. Use only if user asks about wallet or balance.
       requestBody:
         required: true
         content:

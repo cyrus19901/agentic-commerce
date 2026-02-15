@@ -11,7 +11,7 @@ services:
       # Mount data directory for persistent database
       - ./data:/app/data
     # Ensure entrypoint runs
-    entrypoint: ["/bin/sh", "/docker-entrypoint.sh"]
+    entrypoint: ["/bin/sh", "/app/docker-entrypoint.sh"]
     command: ["npm", "run", "dev"]
     environment:
       - NODE_ENV=development
