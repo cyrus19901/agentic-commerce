@@ -348,5 +348,64 @@ for (const user of allUsers) {
   console.log(`✓ Assigned ${defaultPolicies.length} policies to ${user.email}`);
 }
 
+// Seed agents for agent-to-agent transactions
+console.log('\n🤖 Seeding agents...');
+const agents = [
+  {
+    agentId: 'agent://apify.com/web-scraper/v1',
+    name: 'Apify Web Scraper',
+    agentType: 'scraper',
+    services: JSON.stringify(['data-scraping', 'web-extraction', 'crawling']),
+    serviceDescription: 'Enterprise web scraping and data extraction service',
+    baseUrl: 'https://api.apify.com',
+    publicKey: 'ApifyScraperPublicKey123',
+    active: 1,
+  },
+  {
+    agentId: 'agent://browse.ai/data-extractor/v1',
+    name: 'Browse.ai',
+    agentType: 'scraper',
+    services: JSON.stringify(['data-scraping', 'web-extraction', 'monitoring']),
+    serviceDescription: 'No-code web extraction and monitoring platform',
+    baseUrl: 'https://api.browse.ai',
+    publicKey: 'BrowseAiPublicKey456',
+    active: 1,
+  },
+  {
+    agentId: 'agent://rapidapi.com/api-proxy/v1',
+    name: 'RapidAPI',
+    agentType: 'api-gateway',
+    services: JSON.stringify(['api-calling', 'data-integration', 'external-api']),
+    serviceDescription: 'Universal API gateway with 40,000+ APIs',
+    baseUrl: 'https://rapidapi.com',
+    publicKey: 'RapidAPIPublicKey789',
+    active: 1,
+  },
+  {
+    agentId: 'agent://wolfram.com/compute-engine/v1',
+    name: 'Wolfram Compute',
+    agentType: 'compute',
+    services: JSON.stringify(['computation', 'data-analysis', 'analytics']),
+    serviceDescription: 'Advanced computation and analytics engine',
+    baseUrl: 'https://api.wolframalpha.com',
+    publicKey: 'WolframPublicKey321',
+    active: 1,
+  },
+];
+
+for (const agent of agents) {
+  try {
+    db.db.prepare(`
+      INSERT OR REPLACE INTO agents (agent_id, name, agent_type, services, service_description, base_url, public_key, active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(agent.agentId, agent.name, agent.agentType, agent.services, agent.serviceDescription, agent.baseUrl, agent.publicKey, agent.active);
+    console.log(`✓ Seeded agent: ${agent.name}`);
+  } catch (e) {
+    console.log(`Error seeding agent ${agent.name}:`, e);
+  }
+}
+
 console.log('\n✅ Database setup complete!');
+console.log(`✓ Seeded ${defaultPolicies.length} policies`);
+console.log(`✓ Seeded ${agents.length} agents`);
 })();
