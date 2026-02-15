@@ -13,6 +13,7 @@ import {
   createAssociatedTokenAccountInstruction,
   getAccount,
   TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
 } from '@solana/spl-token';
 import { DB } from '@agentic-commerce/database';
 import { PolicyService } from '@agentic-commerce/core';
@@ -285,34 +286,16 @@ export function createChatGPTAgentRoutes(
       let usdcBalance = 0;
       let resolvedTokenAccount = ata;
       
-      // Try standard ATA first
+      // Check standard ATA only (derived from wallet + USDC mint)
       console.log(`🔍 Checking balance for ATA: ${ata.toBase58()}`);
       try {
         const tokenAccount = await getAccount(balanceConnection, ata);
         usdcBalance = Number(tokenAccount.amount) / 1_000_000;
         console.log(`✓ ATA exists, balance: ${usdcBalance} USDC`);
       } catch (error: any) {
-        console.log(`⚠️  Standard ATA check failed: ${error?.message}`);
-        // Search for token accounts owned BY the derived ATA (same as wallet endpoint)
-        try {
-          const parsed = await balanceConnection.getParsedTokenAccountsByOwner(ata, { programId: TOKEN_PROGRAM_ID });
-          console.log(`🔍 Found ${parsed.value.length} accounts owned by ATA`);
-          for (const { pubkey, account } of parsed.value) {
-            const info = account.data?.parsed?.info;
-            if (info?.mint === usdcMintAddress.toBase58()) {
-              const amt = info?.tokenAmount?.uiAmount ?? 0;
-              console.log(`  - ${pubkey.toBase58()}: ${amt} USDC`);
-              if (amt > 0) {
-                usdcBalance = amt;
-                resolvedTokenAccount = pubkey;
-                console.log(`✓ Using token account: ${pubkey.toBase58()}`);
-                break;
-              }
-            }
-          }
-        } catch (searchError: any) {
-          console.log(`⚠️  Search failed: ${searchError?.message}`);
-        }
+        console.log(`⚠️  Standard ATA (${ata.toBase58()}) doesn't exist on-chain yet.`);
+        console.log(`⚠️  To create it, you need ~0.002 SOL for rent. Fund your wallet with SOL first.`);
+        // Don't search for non-standard nested structures - they can't be used for standard payments
       }
       console.log(`💰 Final balance check: ${usdcBalance} USDC at ${resolvedTokenAccount.toBase58()}`);
 
@@ -384,12 +367,23 @@ export function createChatGPTAgentRoutes(
       // Policy passed and balance sufficient - log and proceed
       console.log(`💰 Proceeding with ${serviceType} from ${agentId}: ${priceUsd} USDC (Balance: ${usdcBalance.toFixed(2)} USDC)`);
 
-      // 2. Build 402 payment requirement (payTo from registry when valid, else env/default)
+      // 2. Build 402 payment requirement
       const solanaNetwork = solanaCluster();
       const usdcMintForRequirement = solanaNetwork === 'mainnet-beta' ? USDC_MINT_MAINNET : USDC_MINT_DEVNET;
-      const payTo = isRealSolanaAddress(sellerAgent.usdcTokenAccount)
-        ? sellerAgent.usdcTokenAccount!
-        : (process.env.USDC_TOKEN_ACCOUNT || 'Aj3Z8i5HQ1z9poYBfCicYXHCtfzry9ijcQyunPTaoG4g');
+      
+      // Get seller's main wallet address from env (not the ATA - we'll derive it)
+      const sellerMainWallet = process.env.SERVICE_WALLET_PUBKEY || process.env.USDC_TOKEN_ACCOUNT;
+      if (!sellerMainWallet) {
+        return res.status(500).json({ error: 'AGENT_NOT_CONFIGURED', message: 'Seller wallet not configured. Set USDC_TOKEN_ACCOUNT env var to your main SOL wallet address.' });
+      }
+      
+      // Derive the seller's USDC ATA from their main wallet
+      const sellerWalletPubkey = new PublicKey(sellerMainWallet);
+      const sellerUsdcAta = getAssociatedTokenAddressSync(
+        new PublicKey(usdcMintForRequirement),
+        sellerWalletPubkey
+      );
+      
       const nonce = `nonce_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
       const requirement = {
@@ -398,7 +392,7 @@ export function createChatGPTAgentRoutes(
         network: `solana:${solanaNetwork}`,
         mint: usdcMintForRequirement,
         amount: '100000', // 0.1 USDC (6 decimals) – could come from agent metadata later
-        payTo,
+        payTo: sellerUsdcAta.toBase58(), // Use the derived ATA
         nonce,
         resource: {
           service: serviceType,
@@ -421,6 +415,7 @@ export function createChatGPTAgentRoutes(
       
       // Parse seller's USDC account from 402 payment requirement
       const sellerTokenAccount = new PublicKey(requirement.payTo);
+      // sellerWalletPubkey is already declared above when building the requirement
 
       // Check if buyer's token account exists, create if not
       const transaction = new Transaction();
@@ -434,6 +429,25 @@ export function createChatGPTAgentRoutes(
             buyerTokenAccount,      // ata
             buyerKeypair.publicKey, // owner
             usdcMint                // mint
+          )
+        );
+      }
+
+      // Check if seller's token account exists, create if not
+      try {
+        await getAccount(connection, sellerTokenAccount);
+      } catch (error) {
+        // Seller's token account doesn't exist, add instruction to create it
+        if (!sellerWalletPubkey) {
+          throw new Error('Cannot create seller ATA: seller wallet address not configured');
+        }
+        console.log(`📝 Creating seller's USDC ATA: ${sellerTokenAccount.toBase58()} (owner: ${sellerWalletPubkey.toBase58()})`);
+        transaction.add(
+          createAssociatedTokenAccountInstruction(
+            buyerKeypair.publicKey,     // payer (buyer pays for seller's ATA creation - ~0.002 SOL)
+            sellerTokenAccount,          // ata address to create
+            sellerWalletPubkey,          // owner of the new ATA
+            usdcMint                     // mint (USDC)
           )
         );
       }
