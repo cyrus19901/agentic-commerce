@@ -171,7 +171,12 @@ async function seedDatabase() {
         rules: JSON.stringify({
           maxAmount: 100,
           period: 'monthly',
-          allowedRecipientAgents: ['agent://seller-test/v1', 'agent://platform-agent/v1', 'agent://seller.scraper/v1', 'agent://seller.api-caller/v1']
+          allowedRecipientAgents: [
+            'agent://apify.com/web-scraper/v1',
+            'agent://rapidapi.com/api-proxy/v1',
+            'agent://wolfram.com/compute-engine/v1',
+            'agent://browse.ai/data-extractor/v1'
+          ]
         })
       },
       {
@@ -182,8 +187,13 @@ async function seedDatabase() {
         priority: 90,
         transactionTypes: JSON.stringify(['agent-to-agent']),
         rules: JSON.stringify({
-          allowedRecipientAgents: ['agent://seller-test/v1', 'agent://platform-agent/v1', 'agent://seller.scraper/v1', 'agent://seller.api-caller/v1'],
-          allowedAgentTypes: ['scraper', 'api-caller', 'test']
+          allowedRecipientAgents: [
+            'agent://apify.com/web-scraper/v1',
+            'agent://rapidapi.com/api-proxy/v1',
+            'agent://wolfram.com/compute-engine/v1',
+            'agent://browse.ai/data-extractor/v1'
+          ],
+          allowedAgentTypes: ['scraper', 'api-caller', 'compute', 'data-extractor']
         })
       },
       {
@@ -266,36 +276,47 @@ async function seedDatabase() {
     console.log('🔧 Registering sample agents...');
     const agents = [
       {
-        agentId: 'agent://seller.scraper/v1',
-        name: 'Web Scraper Service',
+        agentId: 'agent://apify.com/web-scraper/v1',
+        name: 'Apify Web Scraper',
         baseUrl: 'http://localhost:4001',
-        services: ['scrape', 'extract'],
-        serviceDescription: 'Extracts data from websites',
+        services: ['data-scraping', 'web-extraction', 'crawling'],
+        serviceDescription: 'Enterprise web scraping and data extraction service. Extracts structured data from any website.',
         acceptedCurrencies: ['USDC'],
-        usdcTokenAccount: 'test-usdc-scraper-account',
-        solanaPubkey: 'test-solana-pubkey-scraper',
+        usdcTokenAccount: 'test-usdc-apify-account',
+        solanaPubkey: 'test-solana-pubkey-apify',
         ownerId: userId
       },
       {
-        agentId: 'agent://seller.api-caller/v1',
-        name: 'API Caller Service',
+        agentId: 'agent://rapidapi.com/api-proxy/v1',
+        name: 'RapidAPI Proxy',
         baseUrl: 'http://localhost:4002',
-        services: ['api-call', 'webhook'],
-        serviceDescription: 'Makes external API calls',
+        services: ['api-calling', 'webhook', 'rest-api'],
+        serviceDescription: 'Universal API gateway. Access 40,000+ APIs through a single interface.',
         acceptedCurrencies: ['USDC'],
-        usdcTokenAccount: 'test-usdc-api-account',
-        solanaPubkey: 'test-solana-pubkey-api',
+        usdcTokenAccount: 'test-usdc-rapidapi-account',
+        solanaPubkey: 'test-solana-pubkey-rapidapi',
         ownerId: userId
       },
       {
-        agentId: 'agent://seller.analytics/v1',
-        name: 'Analytics Service',
+        agentId: 'agent://wolfram.com/compute-engine/v1',
+        name: 'Wolfram Compute Engine',
         baseUrl: 'http://localhost:4003',
-        services: ['analytics', 'reporting'],
-        serviceDescription: 'Provides data analytics',
+        services: ['computation', 'analytics', 'data-processing'],
+        serviceDescription: 'Advanced computational intelligence. Complex calculations, data analysis, and mathematical operations.',
         acceptedCurrencies: ['USDC'],
-        usdcTokenAccount: 'test-usdc-analytics-account',
-        solanaPubkey: 'test-solana-pubkey-analytics',
+        usdcTokenAccount: 'test-usdc-wolfram-account',
+        solanaPubkey: 'test-solana-pubkey-wolfram',
+        ownerId: userId
+      },
+      {
+        agentId: 'agent://browse.ai/data-extractor/v1',
+        name: 'Browse AI Data Extractor',
+        baseUrl: 'http://localhost:4004',
+        services: ['data-scraping', 'monitoring', 'extraction'],
+        serviceDescription: 'No-code web scraper. Train robots to extract and monitor data from any website.',
+        acceptedCurrencies: ['USDC'],
+        usdcTokenAccount: 'test-usdc-browseai-account',
+        solanaPubkey: 'test-solana-pubkey-browseai',
         ownerId: userId
       }
     ];

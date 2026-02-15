@@ -166,4 +166,3 @@ ngrok-db-setup: ## Setup database in ngrok environment
 
 ngrok-restart: ## Restart ngrok environment
 	$(DOCKER_COMPOSE) -f docker-compose.ngrok.yml restart
-

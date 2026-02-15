@@ -190,7 +190,10 @@ function calculateServicePrice(serviceType: string, _params: any): number {
  * In production: proxy to the seller agent's baseUrl (e.g. POST baseUrl + /services/:type).
  */
 async function executeAgentService(serviceType: string, params: any): Promise<any> {
-  const normalizedType = serviceType === 'data-scraping' ? 'scrape' : serviceType;
+  // Normalize service types
+  let normalizedType = serviceType;
+  if (serviceType === 'data-scraping') normalizedType = 'scrape';
+  if (serviceType === 'api-calling') normalizedType = 'api-call';
 
   switch (normalizedType) {
     case 'scrape':

@@ -1211,12 +1211,48 @@ app.post('/api/auth/create-user', async (req, res) => {
       // Don't fail user creation if policy assignment fails
     }
 
+    // Create Solana wallet for new users
+    let walletInfo = null;
+    try {
+      let walletData = await db.getUserWallet(user.id);
+      
+      if (!walletData) {
+        // Import Solana dependencies
+        const { Keypair } = await import('@solana/web3.js');
+        
+        // Create new wallet for user
+        const keypair = Keypair.generate();
+        walletData = {
+          userId: user.id,
+          publicKey: keypair.publicKey.toBase58(),
+          secretKey: Array.from(keypair.secretKey),
+        };
+        await db.saveUserWallet(walletData);
+        console.log(`💼 Created Solana wallet for ${user.email}: ${walletData.publicKey}`);
+        
+        walletInfo = {
+          publicKey: walletData.publicKey,
+          network: process.env.SOLANA_CLUSTER || 'devnet',
+        };
+      } else {
+        console.log(`💼 Wallet already exists for ${user.email}`);
+        walletInfo = {
+          publicKey: walletData.publicKey,
+          network: process.env.SOLANA_CLUSTER || 'devnet',
+        };
+      }
+    } catch (walletError: any) {
+      console.error('⚠️  Failed to create wallet:', walletError.message);
+      // Don't fail user creation if wallet creation fails
+    }
+
     res.json({
       success: true,
       user: {
         id: user.id,
         email: user.email,
         name: user.name,
+        wallet: walletInfo,
       },
       message: user.name ? 'User created/retrieved successfully' : 'User created/retrieved successfully',
     });
@@ -1235,9 +1271,14 @@ app.post('/api/admin/db-setup', async (req, res) => {
     console.log('🔧 Running database setup...');
     const { execSync } = require('child_process');
     
-    // Run setup.ts directly with tsx
-    const setupPath = require('path').join(process.cwd(), 'packages/database/src/setup.ts');
-    console.log('Running setup from:', setupPath);
+    // Run setup.ts directly with tsx - use absolute path from workspace root
+    const path = require('path');
+    // process.cwd() is /app/packages/api in production, so go up to /app
+    const workspaceRoot = path.resolve(process.cwd(), '../..');
+    const setupPath = path.join(workspaceRoot, 'packages/database/src/setup.ts');
+    console.log('CWD:', process.cwd());
+    console.log('Workspace root:', workspaceRoot);
+    console.log('Setup path:', setupPath);
     
     const output = execSync(`npx tsx ${setupPath}`, {
       cwd: process.cwd(),
