@@ -782,6 +782,210 @@ const products = [
     merchant: 'ArtisanLeatherCo',
     category: 'Bags & Purses',
     imageUrl: 'https://example.com/wallet.jpg'
+  },
+  // Additional MinimalGoods products
+  {
+    id: 'prod-journal-009',
+    name: 'Daily Journal',
+    price: 18.99,
+    description: 'Minimalist daily journal with dotted pages',
+    merchant: 'MinimalGoods',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/journal.jpg'
+  },
+  {
+    id: 'prod-planner-010',
+    name: 'Weekly Planner',
+    price: 22.50,
+    description: 'Simple weekly planner for productivity',
+    merchant: 'MinimalGoods',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/planner.jpg'
+  },
+  {
+    id: 'prod-tote-011',
+    name: 'Canvas Tote Bag',
+    price: 32.00,
+    description: 'Minimalist canvas tote with leather handles',
+    merchant: 'MinimalGoods',
+    category: 'Bags & Purses',
+    imageUrl: 'https://example.com/tote.jpg'
+  },
+  // Additional OfficeComfort products
+  {
+    id: 'prod-lamp-012',
+    name: 'LED Desk Lamp',
+    price: 45.99,
+    description: 'Adjustable LED desk lamp with USB charging',
+    merchant: 'OfficeComfort',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/lamp.jpg'
+  },
+  {
+    id: 'prod-mousepad-013',
+    name: 'Premium Mouse Pad',
+    price: 15.99,
+    description: 'Large ergonomic mouse pad with wrist support',
+    merchant: 'OfficeComfort',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/mousepad.jpg'
+  },
+  {
+    id: 'prod-monitor-014',
+    name: 'Monitor Stand',
+    price: 38.50,
+    description: 'Bamboo monitor stand with storage drawer',
+    merchant: 'OfficeComfort',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/monitor-stand.jpg'
+  },
+  {
+    id: 'prod-footrest-015',
+    name: 'Ergonomic Footrest',
+    price: 42.00,
+    description: 'Adjustable ergonomic footrest for office',
+    merchant: 'OfficeComfort',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/footrest.jpg'
+  },
+  // Additional ArtisanLeatherCo products
+  {
+    id: 'prod-portfolio-016',
+    name: 'Leather Portfolio',
+    price: 125.00,
+    description: 'Professional leather portfolio with notepad',
+    merchant: 'ArtisanLeatherCo',
+    category: 'Bags & Purses',
+    imageUrl: 'https://example.com/portfolio.jpg'
+  },
+  {
+    id: 'prod-cardholder-017',
+    name: 'Leather Card Holder',
+    price: 29.99,
+    description: 'Slim leather card holder with 6 slots',
+    merchant: 'ArtisanLeatherCo',
+    category: 'Office & Business',
+    imageUrl: 'https://example.com/cardholder.jpg'
+  },
+  {
+    id: 'prod-deskpad-018',
+    name: 'Leather Desk Pad',
+    price: 65.00,
+    description: 'Full-grain leather desk pad',
+    merchant: 'ArtisanLeatherCo',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/deskpad.jpg'
+  },
+  {
+    id: 'prod-briefcase-019',
+    name: 'Leather Briefcase',
+    price: 385.00,
+    description: 'Executive leather briefcase with laptop compartment',
+    merchant: 'ArtisanLeatherCo',
+    category: 'Bags & Purses',
+    imageUrl: 'https://example.com/briefcase.jpg'
+  },
+  // Additional TechAudio products
+  {
+    id: 'prod-speakers-020',
+    name: 'Desktop Speakers',
+    price: 89.99,
+    description: 'Compact desktop speakers with premium sound',
+    merchant: 'TechAudio',
+    category: 'Electronics',
+    imageUrl: 'https://example.com/speakers.jpg'
+  },
+  {
+    id: 'prod-microphone-021',
+    name: 'USB Microphone',
+    price: 129.00,
+    description: 'Professional USB microphone for calls and recording',
+    merchant: 'TechAudio',
+    category: 'Electronics',
+    imageUrl: 'https://example.com/microphone.jpg'
+  },
+  {
+    id: 'prod-earbuds-022',
+    name: 'Wireless Earbuds',
+    price: 79.99,
+    description: 'True wireless earbuds with noise cancellation',
+    merchant: 'TechAudio',
+    category: 'Electronics',
+    imageUrl: 'https://example.com/earbuds.jpg'
+  },
+  // Additional SilverCraft products
+  {
+    id: 'prod-pen-023',
+    name: 'Silver Ballpoint Pen',
+    price: 45.00,
+    description: 'Sterling silver ballpoint pen',
+    merchant: 'SilverCraft',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/silver-pen.jpg'
+  },
+  {
+    id: 'prod-paperweight-024',
+    name: 'Silver Paperweight',
+    price: 38.50,
+    description: 'Handcrafted silver paperweight',
+    merchant: 'SilverCraft',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/paperweight.jpg'
+  },
+  {
+    id: 'prod-cardholder-025',
+    name: 'Silver Business Card Holder',
+    price: 55.00,
+    description: 'Elegant silver business card holder',
+    merchant: 'SilverCraft',
+    category: 'Office & Business',
+    imageUrl: 'https://example.com/silver-cardholder.jpg'
+  },
+  {
+    id: 'prod-letteropener-026',
+    name: 'Silver Letter Opener',
+    price: 32.00,
+    description: 'Handcrafted silver letter opener',
+    merchant: 'SilverCraft',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/letteropener.jpg'
+  },
+  // More variety - different price points
+  {
+    id: 'prod-sticky-027',
+    name: 'Sticky Note Set',
+    price: 8.99,
+    description: 'Colorful sticky notes in 5 sizes',
+    merchant: 'MinimalGoods',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/sticky.jpg'
+  },
+  {
+    id: 'prod-clips-028',
+    name: 'Binder Clips Set',
+    price: 6.50,
+    description: 'Assorted binder clips 30-pack',
+    merchant: 'OfficeComfort',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/clips.jpg'
+  },
+  {
+    id: 'prod-highlighters-029',
+    name: 'Highlighter Set',
+    price: 12.99,
+    description: 'Premium highlighters in 8 colors',
+    merchant: 'OfficeComfort',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/highlighters.jpg'
+  },
+  {
+    id: 'prod-folders-030',
+    name: 'File Folders Pack',
+    price: 14.99,
+    description: 'Manila file folders 25-pack',
+    merchant: 'MinimalGoods',
+    category: 'Paper & Party Supplies',
+    imageUrl: 'https://example.com/folders.jpg'
   }
 ];
 

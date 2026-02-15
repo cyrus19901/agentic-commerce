@@ -300,6 +300,10 @@ export function createChatGPTAgentRoutes(
       console.log(`💰 Final balance check: ${usdcBalance} USDC at ${resolvedTokenAccount.toBase58()}`);
 
       // 1. CHECK POLICY FIRST (agent-to-agent transaction)
+      // Extract purpose from service params (e.g., URL for scraping, API endpoint, etc.)
+      const purpose = serviceParams?.url || serviceParams?.endpoint || serviceParams?.target || 
+                     serviceParams?.description || JSON.stringify(serviceParams || {});
+      
       const policyCheck = await policyService.checkPurchase({
         userId: user.id,
         productId: `service-${serviceType}`,
@@ -310,6 +314,7 @@ export function createChatGPTAgentRoutes(
         serviceType: serviceType,
         recipientAgentId: agentId,
         buyerAgentId: 'chatgpt',
+        purpose: purpose,
       });
 
       // Handle policy denial
