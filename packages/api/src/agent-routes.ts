@@ -191,8 +191,13 @@ function calculateServicePrice(serviceType: string, _params: any): number {
   const basePrices: Record<string, number> = {
     'scrape': 100_000, // 0.1 USDC
     'data-scraping': 100_000, // 0.1 USDC (alias for ChatGPT flow)
-    'api-call': 100_000,
-    'data-analysis': 200_000,
+    'api-call': 100_000, // 0.1 USDC
+    'api-calling': 100_000, // 0.1 USDC
+    'computation': 100_000, // 0.1 USDC
+    'data-analysis': 200_000, // 0.2 USDC
+    'advanced-analysis': 3_000_000, // 3.0 USDC - for testing approval thresholds
+    'ml-inference': 2_500_000, // 2.5 USDC - for testing $2+ approval
+    'data-pipeline': 5_000_000, // 5.0 USDC - for testing high-value services
     'default': 100_000,
   };
   return basePrices[serviceType] ?? basePrices.default;
@@ -217,6 +222,39 @@ async function executeAgentService(serviceType: string, params: any): Promise<an
           url: params?.url ?? '',
           extractFields: params?.extractFields ?? [],
           content: '[In production, call seller agent at baseUrl to perform real scrape]',
+          timestamp: new Date().toISOString(),
+        }
+      };
+    case 'advanced-analysis':
+      return {
+        ok: true,
+        service: serviceType,
+        data: {
+          analysisType: 'advanced',
+          cost: '3.0 USDC',
+          result: '[In production, perform advanced data analysis]',
+          timestamp: new Date().toISOString(),
+        }
+      };
+    case 'ml-inference':
+      return {
+        ok: true,
+        service: serviceType,
+        data: {
+          model: params?.model ?? 'default',
+          cost: '2.5 USDC',
+          result: '[In production, run ML model inference]',
+          timestamp: new Date().toISOString(),
+        }
+      };
+    case 'data-pipeline':
+      return {
+        ok: true,
+        service: serviceType,
+        data: {
+          pipeline: params?.pipeline ?? 'default',
+          cost: '5.0 USDC',
+          result: '[In production, execute data pipeline]',
           timestamp: new Date().toISOString(),
         },
         message: 'Service executed successfully',
