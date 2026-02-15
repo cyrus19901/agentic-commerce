@@ -537,12 +537,35 @@ export class PolicyService {
     // Composite conditions (for complex rules with multiple field checks)
     if (policy.type === 'composite' && policy.rules.compositeConditions) {
       hasMatchingCondition = true;
+      
+      // Check if ALL conditions match
+      let allConditionsMatch = true;
       for (const condition of policy.rules.compositeConditions) {
         const result = this.checkCompositeCondition(condition, request);
         if (!result.passed) {
-          return result;
+          allConditionsMatch = false;
+          break;
         }
       }
+      
+      // If all conditions match, apply the fallbackAction
+      if (allConditionsMatch) {
+        const fallbackAction = policy.rules.fallbackAction;
+        
+        if (fallbackAction === 'deny') {
+          return {
+            passed: false,
+            reason: policy.name,
+          };
+        } else if (fallbackAction === 'require_approval') {
+          return {
+            passed: false,
+            reason: policy.name,
+            requiresApproval: true,
+          };
+        }
+      }
+      // If conditions don't all match, policy doesn't apply (pass)
     }
 
     // If no conditions matched, apply fallback action

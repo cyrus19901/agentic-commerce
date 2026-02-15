@@ -48,7 +48,7 @@ export function createAgentRoutes(
       const usdcMint = process.env.USDC_MINT
         || (isMainnet ? (process.env.USDC_MINT_MAINNET || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v') : (process.env.USDC_MINT_DEVNET || 'Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr'));
       const network = isMainnet ? 'solana:mainnet' : 'solana:devnet';
-      const facilitatorUrl = process.env.FACILITATOR_URL || `${process.env.API_URL || 'http://localhost:3000'}/api/facilitator/verify`;
+      const facilitatorUrl = process.env.FACILITATOR_URL || `${process.env.API_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:3000'}/api/facilitator/verify`;
 
       if (!sellerMainWallet) {
         return res.status(500).json({ 
