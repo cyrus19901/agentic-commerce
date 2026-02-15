@@ -370,16 +370,16 @@ const defaultPolicies: Policy[] = [
     name: 'A2A: Block Untrusted Agents',
     description: 'Block specific agents from receiving payments',
     type: 'agent',
-    enabled: true,
+    enabled: false, // Disabled by default - enable for testing by blocking Wolfram agent
     priority: 90,
     conditions: {
       transactionType: ['agent-to-agent'],
     },
     rules: {
       blockedRecipientAgents: [
+        'agent://wolfram.com/compute-engine/v1', // For testing - blocks Wolfram
         'agent://untrusted.com/service',
         'agent://suspicious-bot.io/scraper',
-        'agent://blocked-agent.xyz',
       ],
       fallbackAction: 'deny',
     },
@@ -490,6 +490,80 @@ const defaultPolicies: Policy[] = [
       fallbackAction: 'require_approval',
     },
   },
+  
+  // Simple practical policies for easy testing
+  {
+    id: 'policy-31-block-facebook-scraping',
+    name: 'Block Facebook Scraping',
+    description: 'Cannot scrape data from Facebook',
+    type: 'composite',
+    enabled: true,
+    priority: 95,
+    conditions: {
+      transactionType: ['agent-to-agent'],
+      serviceType: ['data-scraping', 'scrape', 'web-scraper'],
+    },
+    rules: {
+      compositeConditions: [
+        { field: 'purpose', operator: 'contains', value: 'facebook' },
+      ],
+      fallbackAction: 'deny',
+    },
+  },
+  
+  {
+    id: 'policy-32-block-twitter-scraping',
+    name: 'Block Twitter Scraping',
+    description: 'Cannot scrape data from Twitter/X',
+    type: 'composite',
+    enabled: true,
+    priority: 95,
+    conditions: {
+      transactionType: ['agent-to-agent'],
+      serviceType: ['data-scraping', 'scrape', 'web-scraper'],
+    },
+    rules: {
+      compositeConditions: [
+        { field: 'purpose', operator: 'contains', value: 'twitter' },
+      ],
+      fallbackAction: 'deny',
+    },
+  },
+  
+  {
+    id: 'policy-33-block-linkedin-scraping',
+    name: 'Block LinkedIn Scraping',
+    description: 'Cannot scrape data from LinkedIn',
+    type: 'composite',
+    enabled: true,
+    priority: 95,
+    conditions: {
+      transactionType: ['agent-to-agent'],
+      serviceType: ['data-scraping', 'scrape', 'web-scraper'],
+    },
+    rules: {
+      compositeConditions: [
+        { field: 'purpose', operator: 'contains', value: 'linkedin' },
+      ],
+      fallbackAction: 'deny',
+    },
+  },
+  
+  {
+    id: 'policy-34-block-expensive-ai-services',
+    name: 'Block Expensive AI/ML Services',
+    description: 'Cannot use advanced-analysis, ml-inference, or data-pipeline services',
+    type: 'transaction',
+    enabled: true,
+    priority: 90,
+    conditions: {
+      transactionType: ['agent-to-agent'],
+      serviceType: ['advanced-analysis', 'ml-inference', 'data-pipeline'],
+    },
+    rules: {
+      fallbackAction: 'deny',
+    },
+  },
 ];
 
 (async () => {
@@ -595,6 +669,21 @@ const agents = [
     ownerId: 'system',
     metadata: JSON.stringify({ type: 'compute', tier: 'premium' }),
   },
+  {
+    id: 'agent-aiservices-005',
+    agentId: 'agent://aiservices.io/enterprise/v1',
+    name: 'AI Services Enterprise',
+    services: JSON.stringify(['advanced-analysis', 'ml-inference', 'data-pipeline']),
+    serviceDescription: 'Enterprise AI and ML services for advanced data processing',
+    baseUrl: 'https://api.aiservices.io',
+    acceptedCurrencies: JSON.stringify(['USDC']),
+    usdcTokenAccount: SERVICE_WALLET_USDC_ACCOUNT,
+    solanaPubkey: 'AIServicesPubKey1234567890',
+    active: 1,
+    verified: 1,
+    ownerId: 'system',
+    metadata: JSON.stringify({ type: 'ai-ml', tier: 'enterprise', highCost: true }),
+  },
 ];
 
 for (const agent of agents) {
@@ -618,7 +707,111 @@ for (const agent of agents) {
   }
 }
 
+// Seed sample products from approved merchants
+console.log('\n📦 Seeding sample products...');
+
+const products = [
+  {
+    id: 'prod-notebook-001',
+    name: 'Minimalist Leather Notebook',
+    price: 28.99,
+    description: 'Premium leather notebook with 200 pages',
+    merchant: 'MinimalGoods',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/notebook.jpg'
+  },
+  {
+    id: 'prod-pen-002',
+    name: 'Premium Pen Set',
+    price: 45.00,
+    description: 'Executive pen set with ballpoint and fountain pen',
+    merchant: 'OfficeComfort',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/pens.jpg'
+  },
+  {
+    id: 'prod-bag-003',
+    name: 'Handmade Leather Messenger Bag',
+    price: 89.99,
+    description: 'Artisan leather messenger bag with laptop compartment',
+    merchant: 'ArtisanLeatherCo',
+    category: 'Bags & Purses',
+    imageUrl: 'https://example.com/bag.jpg'
+  },
+  {
+    id: 'prod-headphones-004',
+    name: 'Studio Monitor Headphones',
+    price: 199.99,
+    description: 'Professional studio monitor headphones',
+    merchant: 'TechAudio',
+    category: 'Electronics',
+    imageUrl: 'https://example.com/headphones.jpg'
+  },
+  {
+    id: 'prod-keychain-005',
+    name: 'Silver Keychain',
+    price: 24.99,
+    description: 'Handcrafted sterling silver keychain',
+    merchant: 'SilverCraft',
+    category: 'Office & Business',
+    imageUrl: 'https://example.com/keychain.jpg'
+  },
+  {
+    id: 'prod-organizer-006',
+    name: 'Desk Organizer Set',
+    price: 35.50,
+    description: 'Bamboo desk organizer with multiple compartments',
+    merchant: 'MinimalGoods',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/organizer.jpg'
+  },
+  {
+    id: 'prod-chair-007',
+    name: 'Ergonomic Office Chair',
+    price: 299.00,
+    description: 'Adjustable ergonomic office chair with lumbar support',
+    merchant: 'OfficeComfort',
+    category: 'Office Supplies',
+    imageUrl: 'https://example.com/chair.jpg'
+  },
+  {
+    id: 'prod-wallet-008',
+    name: 'Leather Bifold Wallet',
+    price: 49.99,
+    description: 'Slim leather bifold wallet with RFID protection',
+    merchant: 'ArtisanLeatherCo',
+    category: 'Bags & Purses',
+    imageUrl: 'https://example.com/wallet.jpg'
+  }
+];
+
+for (const product of products) {
+  try {
+    db.db.prepare(`
+      INSERT OR REPLACE INTO products (
+        id, name, price, description, merchant, category, image_url, 
+        created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      product.id,
+      product.name,
+      product.price,
+      product.description,
+      product.merchant,
+      product.category,
+      product.imageUrl,
+      timestamp,
+      timestamp
+    );
+    console.log(`✓ Seeded product: ${product.name} ($${product.price})`);
+  } catch (e) {
+    console.log(`Error seeding product ${product.name}:`, e);
+  }
+}
+
 console.log('\n✅ Database setup complete!');
 console.log(`✓ Seeded ${defaultPolicies.length} policies`);
 console.log(`✓ Seeded ${agents.length} agents`);
+console.log(`✓ Seeded ${products.length} products`);
 })();
