@@ -164,8 +164,8 @@ info:
   version: 2.0.0
 
 servers:
-  - url: https://worth-docs-tan-rap.trycloudflare.com
-    description: Local Docker environment via Cloudflare Tunnel
+  - url: https://agentic-commerce-79fc.onrender.com
+    description: Production deployment on Render
 
 paths:
   # ============================================================================
