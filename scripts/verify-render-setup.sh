@@ -28,7 +28,7 @@ echo ""
 
 # 2. Check Agents
 echo "2️⃣  Checking agents..."
-AGENTS=$(curl -s "$RENDER_URL/api/chatgpt-agent/agents" -H "User-Email: test@verify.com")
+AGENTS=$(curl -s "$RENDER_URL/api/registry/agents?user_email=test@verify.com")
 AGENT_COUNT=$(echo "$AGENTS" | jq -r '.agents | length' 2>/dev/null)
 if [ "$AGENT_COUNT" = "4" ]; then
     echo -e "${GREEN}✓${NC} Found 4 agents"
