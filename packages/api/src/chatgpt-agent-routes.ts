@@ -509,7 +509,9 @@ export function createChatGPTAgentRoutes(
         .replace(/=/g, '');
 
       // 4. Complete service request with payment proof (use internal localhost, not external URL)
-      const internalApiUrl = 'http://localhost:3000';
+      // Use internal URL - port depends on environment (3000 local, 10000 Render)
+      const port = process.env.PORT || '3000';
+      const internalApiUrl = `http://localhost:${port}`;
       const serviceResponse = await fetch(`${internalApiUrl}/api/agent/services/${serviceType}`, {
         method: 'POST',
         headers: {
