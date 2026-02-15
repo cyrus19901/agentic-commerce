@@ -212,22 +212,42 @@ export class PolicyService {
     // Budget check
     if (policy.type === 'budget') {
       hasMatchingCondition = true;
-      // Skip budget aggregation for 'transaction' period (per-transaction limits handled elsewhere)
-      if (policy.rules.period !== 'transaction') {
-        const spent = await this.db.getUserSpending(request.userId, policy.rules.period!);
-        if (spent + request.price > (policy.rules.maxAmount || 0)) {
+      
+      // Check if maxAmount is defined
+      if (policy.rules.maxAmount === undefined) {
+        // No budget limit specified, apply fallbackAction
+        const fallbackAction = policy.rules.fallbackAction;
+        if (fallbackAction === 'require_approval') {
           return {
             passed: false,
-            reason: `Would exceed ${policy.rules.period} budget of $${policy.rules.maxAmount}`,
+            reason: policy.name,
+            requiresApproval: true,
+          };
+        } else if (fallbackAction === 'deny') {
+          return {
+            passed: false,
+            reason: policy.name,
           };
         }
       } else {
-        // Per-transaction limit
-        if (request.price > (policy.rules.maxAmount || Infinity)) {
-          return {
-            passed: false,
-            reason: `Exceeds per-transaction limit of $${policy.rules.maxAmount}`,
-          };
+        // Budget limit is specified, check it
+        // Skip budget aggregation for 'transaction' period (per-transaction limits handled elsewhere)
+        if (policy.rules.period !== 'transaction') {
+          const spent = await this.db.getUserSpending(request.userId, policy.rules.period!);
+          if (spent + request.price > policy.rules.maxAmount) {
+            return {
+              passed: false,
+              reason: `Would exceed ${policy.rules.period} budget of $${policy.rules.maxAmount}`,
+            };
+          }
+        } else {
+          // Per-transaction limit
+          if (request.price > policy.rules.maxAmount) {
+            return {
+              passed: false,
+              reason: `Exceeds per-transaction limit of $${policy.rules.maxAmount}`,
+            };
+          }
         }
       }
     }
@@ -235,11 +255,33 @@ export class PolicyService {
     // Transaction amount check
     if (policy.type === 'transaction') {
       hasMatchingCondition = true;
-      if (request.price > (policy.rules.maxTransactionAmount || Infinity)) {
-        return {
-          passed: false,
-          reason: `Exceeds transaction limit of $${policy.rules.maxTransactionAmount}`,
-        };
+      
+      // If maxTransactionAmount is specified, check it
+      if (policy.rules.maxTransactionAmount !== undefined) {
+        if (request.price > policy.rules.maxTransactionAmount) {
+          return {
+            passed: false,
+            reason: `Exceeds transaction limit of $${policy.rules.maxTransactionAmount}`,
+          };
+        }
+      } else {
+        // No amount limit specified, but conditions matched
+        // Apply fallbackAction (e.g., require approval for all API services)
+        const fallbackAction = policy.rules.fallbackAction;
+        
+        if (fallbackAction === 'require_approval') {
+          return {
+            passed: false,
+            reason: policy.name,
+            requiresApproval: true,
+          };
+        } else if (fallbackAction === 'deny') {
+          return {
+            passed: false,
+            reason: policy.name,
+          };
+        }
+        // If fallbackAction is 'approve' or undefined, let it pass
       }
     }
 
