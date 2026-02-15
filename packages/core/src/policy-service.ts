@@ -97,6 +97,23 @@ export class PolicyService {
   private async checkPolicy(policy: Policy, request: PurchaseRequest, transactionType: string) {
     let hasMatchingCondition = false;
     
+    // Check policy conditions - serviceType (for agent-to-agent)
+    if (policy.conditions?.serviceType && policy.conditions.serviceType.length > 0 && request.serviceType) {
+      const serviceTypeLower = request.serviceType.toLowerCase();
+      const matchesServiceType = policy.conditions.serviceType.some(
+        (st: string) => st.toLowerCase() === serviceTypeLower
+      );
+      
+      if (!matchesServiceType) {
+        // Policy doesn't apply to this service type
+        return {
+          passed: true,
+          reason: undefined,
+        };
+      }
+      hasMatchingCondition = true;
+    }
+    
     // Agent-to-agent specific validations
     if (transactionType === 'agent-to-agent') {
       // Check recipient agent restrictions
