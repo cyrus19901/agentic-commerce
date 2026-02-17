@@ -1014,8 +1014,39 @@ for (const product of products) {
   }
 }
 
+// Seed default approval reviewers (example users for demo)
+console.log('\n👥 Seeding default approval reviewers...');
+const defaultReviewers = [
+  { email: 'sarah.chen@company.com', name: 'Sarah Chen', role: 'admin' },
+  { email: 'michael.park@company.com', name: 'Michael Park', role: 'manager' },
+  { email: 'emily.johnson@company.com', name: 'Emily Johnson', role: 'reviewer' },
+];
+
+for (const reviewer of defaultReviewers) {
+  try {
+    const userId = `user-${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+    const existing = db.db.prepare('SELECT id FROM users WHERE email = ?').get(reviewer.email) as any;
+    
+    if (!existing) {
+      db.db.prepare(`
+        INSERT INTO users (id, email, name, role, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(userId, reviewer.email, reviewer.name, reviewer.role, timestamp, timestamp);
+      console.log(`✓ Created reviewer user: ${reviewer.name} (${reviewer.role})`);
+    } else {
+      // Update existing user's role
+      db.db.prepare('UPDATE users SET role = ?, name = ?, updated_at = ? WHERE id = ?')
+        .run(reviewer.role, reviewer.name, timestamp, existing.id);
+      console.log(`✓ Updated reviewer user: ${reviewer.name} (${reviewer.role})`);
+    }
+  } catch (e) {
+    console.log(`Error seeding reviewer ${reviewer.name}:`, e);
+  }
+}
+
 console.log('\n✅ Database setup complete!');
 console.log(`✓ Seeded ${defaultPolicies.length} policies`);
 console.log(`✓ Seeded ${agents.length} agents`);
 console.log(`✓ Seeded ${products.length} products`);
+console.log(`✓ Seeded ${defaultReviewers.length} approval reviewers`);
 })();

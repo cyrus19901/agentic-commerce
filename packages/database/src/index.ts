@@ -41,6 +41,7 @@ export class DB {
         id TEXT PRIMARY KEY,
         email TEXT UNIQUE NOT NULL,
         name TEXT,
+        role TEXT DEFAULT 'user',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -131,7 +132,7 @@ export class DB {
       CREATE INDEX IF NOT EXISTS idx_tx_signature ON x402_nonces(tx_signature);
       CREATE INDEX IF NOT EXISTS idx_expires_at ON x402_nonces(expires_at);
 
-      -- NEW: Agent Registry
+      -- Agent Registry
       CREATE TABLE IF NOT EXISTS registered_agents (
         id TEXT PRIMARY KEY,
         agent_id TEXT UNIQUE NOT NULL,
@@ -230,6 +231,24 @@ export class DB {
     const result = this.db.prepare(query).get(...params);
 
     return result.total;
+  }
+
+  async getSpendingByTransactionType(userId: string, period: 'daily' | 'weekly' | 'monthly'): Promise<{
+    agentToMerchant: number;
+    agentToAgent: number;
+    total: number;
+  }> {
+    const [a2m, a2a, total] = await Promise.all([
+      this.getUserSpending(userId, period, 'agent-to-merchant'),
+      this.getUserSpending(userId, period, 'agent-to-agent'),
+      this.getUserSpending(userId, period),
+    ]);
+    
+    return {
+      agentToMerchant: a2m,
+      agentToAgent: a2a,
+      total,
+    };
   }
 
   async recordPurchaseAttempt(attempt: any): Promise<number> {
@@ -599,13 +618,57 @@ export class DB {
   /**
    * List all users
    */
-  async getAllUsers(): Promise<{ id: string; email: string; name?: string }[]> {
+  async getAllUsers(): Promise<{ id: string; email: string; name?: string; role?: string }[]> {
     const rows = this.db.prepare('SELECT * FROM users ORDER BY created_at DESC').all();
     return rows.map((row: any) => ({
       id: row.id,
       email: row.email,
       name: row.name || undefined,
+      role: row.role || 'user',
     }));
+  }
+
+  /**
+   * Approval Reviewer Management
+   * Uses user.role field: 'admin', 'manager', 'reviewer', 'user'
+   */
+  async getApprovalReviewers(): Promise<Array<{ id: string; email: string; name?: string; role: string; active: boolean }>> {
+    const rows = this.db.prepare(`
+      SELECT id, email, name, role
+      FROM users
+      WHERE role IN ('admin', 'manager', 'reviewer')
+      ORDER BY 
+        CASE role 
+          WHEN 'admin' THEN 1 
+          WHEN 'manager' THEN 2 
+          WHEN 'reviewer' THEN 3 
+        END,
+        name ASC
+    `).all();
+    
+    return rows.map((row: any) => ({
+      id: row.id,
+      email: row.email,
+      name: row.name || undefined,
+      role: row.role,
+      active: true,
+    }));
+  }
+
+  async addApprovalReviewer(userId: string, role: string = 'reviewer'): Promise<void> {
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE users SET role = ?, updated_at = ? WHERE id = ?').run(role, now, userId);
+  }
+
+  async removeApprovalReviewer(userId: string): Promise<void> {
+    const now = new Date().toISOString();
+    // Demote to regular user instead of deleting
+    this.db.prepare('UPDATE users SET role = ?, updated_at = ? WHERE id = ?').run('user', now, userId);
+  }
+
+  async updateReviewerRole(userId: string, role: string): Promise<void> {
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE users SET role = ?, updated_at = ? WHERE id = ?').run(role, now, userId);
   }
 
   /**
