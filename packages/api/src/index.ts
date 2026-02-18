@@ -1079,6 +1079,74 @@ app.delete('/api/users/:userId/policies/:policyId', authenticate, async (req, re
 });
 
 // ============================================================================
+// Approval Reviewer Management
+// ============================================================================
+
+// Get all approval reviewers
+app.get('/api/reviewers', authenticate, async (req, res) => {
+  try {
+    const reviewers = await db.getApprovalReviewers();
+    res.json({ reviewers });
+  } catch (error: any) {
+    console.error('Get reviewers error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add approval reviewer
+app.post('/api/reviewers', authenticate, async (req, res) => {
+  try {
+    const { user_id, role = 'reviewer' } = req.body;
+    
+    if (!user_id) {
+      return res.status(400).json({ error: 'user_id is required' });
+    }
+    
+    const user = await db.getUserById(user_id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    await db.addApprovalReviewer(user_id, role);
+    res.json({ message: 'Reviewer added successfully' });
+  } catch (error: any) {
+    console.error('Add reviewer error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update reviewer role
+app.put('/api/reviewers/:userId', authenticate, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { role } = req.body;
+    
+    if (!role) {
+      return res.status(400).json({ error: 'role is required' });
+    }
+    
+    await db.updateReviewerRole(userId, role);
+    res.json({ message: 'Reviewer role updated successfully' });
+  } catch (error: any) {
+    console.error('Update reviewer error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remove approval reviewer
+app.delete('/api/reviewers/:userId', authenticate, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    await db.removeApprovalReviewer(userId);
+    res.json({ message: 'Reviewer removed successfully' });
+  } catch (error: any) {
+    console.error('Remove reviewer error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
 // User-Specific JWT Token Generation (for ChatGPT Authentication)
 // ============================================================================
 
