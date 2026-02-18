@@ -483,6 +483,48 @@ export class DB {
   }
 
   /**
+   * Approval Reviewer Management
+   * Uses user.role field: 'admin', 'manager', 'reviewer', 'user'
+   */
+  async getApprovalReviewers(): Promise<Array<{ id: string; email: string; name?: string; role: string; active: boolean }>> {
+    const rows = this.db.prepare(`
+      SELECT id, email, name, role
+      FROM users
+      WHERE role IN ('admin', 'manager', 'reviewer')
+      ORDER BY 
+        CASE role 
+          WHEN 'admin' THEN 1 
+          WHEN 'manager' THEN 2 
+          WHEN 'reviewer' THEN 3 
+        END,
+        name ASC
+    `).all();
+    
+    return rows.map((row: any) => ({
+      id: row.id,
+      email: row.email,
+      name: row.name || undefined,
+      role: row.role,
+      active: true,
+    }));
+  }
+
+  async addApprovalReviewer(userId: string, role: string = 'reviewer'): Promise<void> {
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE users SET role = ?, updated_at = ? WHERE id = ?').run(role, now, userId);
+  }
+
+  async removeApprovalReviewer(userId: string): Promise<void> {
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE users SET role = ?, updated_at = ? WHERE id = ?').run('user', now, userId);
+  }
+
+  async updateReviewerRole(userId: string, role: string): Promise<void> {
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE users SET role = ?, updated_at = ? WHERE id = ?').run(role, now, userId);
+  }
+
+  /**
    * Clean up duplicate users (keep oldest, merge policies/purchases)
    */
   async cleanupDuplicateUsers(): Promise<{
