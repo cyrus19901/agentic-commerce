@@ -39,8 +39,9 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/packages ./packages
 
-# Create data directory for SQLite
+# Create data directory for SQLite and copy pre-seeded database
 RUN mkdir -p /app/data
+COPY packages/api/data/shopping.db /app/data/shopping.db
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
