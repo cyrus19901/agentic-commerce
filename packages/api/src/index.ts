@@ -118,18 +118,19 @@ const authenticate = (req: any, res: any, next: any) => {
   
   const authHeader = req.headers.authorization;
   
-  // CHATGPT SUPPORT: Allow authentication via user_email in request body
-  if (!authHeader && req.body && req.body.user_email) {
-    console.log('No auth header, attempting email-based auth:', req.body.user_email);
+  // CHATGPT SUPPORT: Allow authentication via user_email in request body or query params
+  const emailFromRequest = req.body?.user_email || req.query?.user_email;
+  if (!authHeader && emailFromRequest) {
+    console.log('No auth header, attempting email-based auth:', emailFromRequest);
     return (async () => {
       try {
-        const user = await db.getUserByEmail(req.body.user_email);
+        const user = await db.getUserByEmail(emailFromRequest as string);
         if (user) {
           req.user = { userId: user.id, email: user.email };
           console.log('Email-based auth successful for:', user.email);
           return next();
         } else {
-          console.log('User not found for email:', req.body.user_email);
+          console.log('User not found for email:', emailFromRequest);
           return res.status(401).json({ 
             error: 'User not found', 
             message: 'Please create an account first using /api/auth/create-user' 
