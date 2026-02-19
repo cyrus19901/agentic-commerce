@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@prisma/client": "^7.3.0",
+    "better-sqlite3": "^12.6.2",
     "prisma": "^7.3.0",
     "stripe": "^20.2.0"
   }

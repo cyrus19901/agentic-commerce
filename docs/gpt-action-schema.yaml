@@ -274,6 +274,17 @@ paths:
                 category:
                   type: string
                   description: Product category (e.g., "Office Supplies", "Electronics", "Bags & Purses", "Travel & Accessories")
+                transaction_type:
+                  type: string
+                  enum: ["agent-to-merchant", "agent-to-agent"]
+                  description: |
+                    Transaction type - REQUIRED for proper categorization:
+                    - "agent-to-merchant": Agent buying physical products from merchants (default)
+                    - "agent-to-agent": Agent buying services from other AI agents (e.g., API calls, data processing)
+                  default: "agent-to-merchant"
+                service_type:
+                  type: string
+                  description: For agent-to-agent transactions, the type of service (e.g., "Data Processing", "Translation API", "Model Inference")
                 agent_name:
                   type: string
                   description: Name of the AI agent making the request (optional, for agent-based policies)
@@ -408,6 +419,17 @@ paths:
                   type: string
                 category:
                   type: string
+                transaction_type:
+                  type: string
+                  enum: ["agent-to-merchant", "agent-to-agent"]
+                  description: |
+                    Transaction type - REQUIRED for proper categorization:
+                    - "agent-to-merchant": Agent buying physical products from merchants (default)
+                    - "agent-to-agent": Agent buying services from other AI agents
+                  default: "agent-to-merchant"
+                service_type:
+                  type: string
+                  description: For agent-to-agent transactions, the type of service being purchased
                 product_url:
                   type: string
                   description: URL to the product page

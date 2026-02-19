@@ -41,6 +41,13 @@ export interface Policy {
     blockedAgentTypes?: string[];
     allowedRecipientAgents?: string[];
     blockedRecipientAgents?: string[];
+    allowedRecipientAgentTypes?: string[];
+    blockedRecipientAgentTypes?: string[];
+    // Service-based rules (for agent-to-agent)
+    allowedServiceTypes?: string[];
+    blockedServiceTypes?: string[];
+    allowedServiceCategories?: string[];
+    blockedServiceCategories?: string[];
     // Purpose-based rules
     allowedPurposes?: string[];
     blockedPurposes?: string[];
@@ -74,6 +81,8 @@ export interface PurchaseRequest {
   price: number;
   merchant: string;
   category?: string;
+  transactionType?: 'agent-to-merchant' | 'agent-to-agent'; // NEW: Transaction type
+  serviceType?: string; // NEW: For A2A transactions, the service type
   // Additional fields for policy conditions
   agentName?: string;
   agentType?: string;
