@@ -76,6 +76,37 @@ const authenticate = (req: any, res: any, next: any) => {
     return res.status(200).end();
   }
   
+  // DEVELOPMENT MODE: Bypass JWT authentication if DISABLE_AUTH=true
+  if (process.env.DISABLE_AUTH === 'true') {
+    console.log('⚠️  AUTHENTICATION DISABLED (Development Mode)');
+    console.log('Path:', req.path, 'Method:', req.method);
+    
+    // Extract user_email from body (POST/PUT) or query params (GET/DELETE)
+    const testEmail = req.body?.user_email || req.query?.user_email || 'dev@example.com';
+    
+    // Look up the real dev user from database
+    return (async () => {
+      try {
+        const user = await db.getUserByEmail(testEmail as string);
+        if (user) {
+          req.user = { userId: user.id, email: user.email };
+          console.log('✓ Using dev user:', user.email, '(ID:', user.id, ')');
+          return next();
+        } else {
+          console.log('⚠️  Dev user not found:', testEmail);
+          console.log('💡 Available users:', await db.getAllUsers().then((users: any[]) => users.map((u: any) => u.email).join(', ')));
+          return res.status(401).json({ 
+            error: 'Dev user not found', 
+            message: `User ${testEmail} not found. Run scripts/create-dev-user.ts to create users.` 
+          });
+        }
+      } catch (error) {
+        console.error('Error looking up dev user:', error);
+        return res.status(500).json({ error: 'Internal server error' });
+      }
+    })();
+  }
+  
   // Log all authentication attempts for debugging
   const userAgent = req.headers['user-agent'] || '';
   const isChatGPT = userAgent.includes('ChatGPT') || userAgent.includes('openai');
@@ -259,14 +290,28 @@ app.post('/api/policy/check', authenticate, async (req, res) => {
       time_of_day,
       day_of_week,
       recipient_agent,
-      purpose
+      purpose,
+      transaction_type, // NEW: Support A2M vs A2A
+      service_type,
+      recipient_agent_id,
+      buyer_agent_id
     } = req.body;
+    
+    // Validate required fields
+    if (price === null || price === undefined || typeof price !== 'number') {
+      return res.status(400).json({ 
+        error: 'Invalid request', 
+        message: 'price is required and must be a number' 
+      });
+    }
     
     // ALWAYS prioritize token user ID for security (token is authenticated, body can be spoofed)
     const finalUserId = tokenUser || user_id || 'test-user-123';
     
-    console.log('Policy check request:', JSON.stringify({ ...req.body, user_id: finalUserId }, null, 2));
-    const result = await policyService.checkPurchase({
+    console.log('Policy check request:', JSON.stringify({ ...req.body, user_id: finalUserId, transaction_type }, null, 2));
+    
+    // READ-ONLY policy check (does NOT record attempt)
+    const result = await policyService.checkPolicyOnly({
       userId: finalUserId,
       productId: product_id,
       price,
@@ -278,7 +323,10 @@ app.post('/api/policy/check', authenticate, async (req, res) => {
       dayOfWeek: day_of_week,
       recipientAgent: recipient_agent,
       purpose,
+      transactionType: transaction_type,
+      serviceType: service_type,
     });
+    
     console.log('Policy check response:', JSON.stringify(result, null, 2));
     res.json(result);
   } catch (error: any) {
@@ -496,14 +544,30 @@ app.post('/api/checkout/initiate', authenticate, async (req, res) => {
     const tokenUser = req.user?.userId;
     
     console.log('Checkout request body:', JSON.stringify(req.body, null, 2));
-    const { user_id, product_id, amount, merchant, category, product_name, product_url, product_image_url } = req.body;
+    const { 
+      user_id, 
+      product_id, 
+      amount, 
+      merchant, 
+      category, 
+      product_name, 
+      product_url, 
+      product_image_url,
+      transaction_type, // NEW: 'agent-to-merchant' or 'agent-to-agent'
+      service_type,
+      recipient_agent_id,
+      buyer_agent_id
+    } = req.body;
 
     // ALWAYS prioritize token user ID for security (token is authenticated, body can be spoofed)
     const finalUserId = tokenUser || user_id || 'test-user-123';
 
-    // Check policy first
+    // Determine transaction type (default to agent-to-merchant)
+    const finalTransactionType = transaction_type || 'agent-to-merchant';
+
+    // Check policy first (read-only check to avoid duplicate recording)
     const { agent_name, agent_type, time_of_day, day_of_week, recipient_agent, purpose } = req.body;
-    const policyCheck = await policyService.checkPurchase({
+    const policyCheck = await policyService.checkPolicyOnly({
       userId: finalUserId,
       productId: product_id,
       price: amount,
@@ -515,6 +579,8 @@ app.post('/api/checkout/initiate', authenticate, async (req, res) => {
       dayOfWeek: day_of_week,
       recipientAgent: recipient_agent,
       purpose,
+      transactionType: finalTransactionType,
+      serviceType: service_type,
     });
 
     // Handle policy check results
@@ -564,6 +630,7 @@ app.post('/api/checkout/initiate', authenticate, async (req, res) => {
         amount,
         merchant: finalMerchant || merchant,
         category: finalCategory || category,
+        transactionType: finalTransactionType, // NEW: Include transaction type
         allowed: false, // Not yet approved
         requiresApproval: true,
         policyCheckResults: policyCheck.matchedPolicies.map((p: any) => ({
@@ -606,6 +673,7 @@ app.post('/api/checkout/initiate', authenticate, async (req, res) => {
       amount,
       merchant: finalMerchant || merchant,
       category: finalCategory || category,
+      transactionType: finalTransactionType,
       allowed: true,
       requiresApproval: false,
       policyCheckResults: policyCheck.matchedPolicies.map((p: any) => ({
@@ -859,10 +927,11 @@ app.get('/api/dashboard', authenticate, async (req, res) => {
     }
     
     // Get spending data
-    const [daily, weekly, monthly] = await Promise.all([
+    const [daily, weekly, monthly, spendingByType] = await Promise.all([
       db.getUserSpending(finalUserId, 'daily'),
       db.getUserSpending(finalUserId, 'weekly'),
       db.getUserSpending(finalUserId, 'monthly'),
+      db.getSpendingByTransactionType(finalUserId, 'monthly'), // Get A2M vs A2A breakdown
     ]);
     
     // Get policies
@@ -877,6 +946,9 @@ app.get('/api/dashboard', authenticate, async (req, res) => {
     // Get policy compliance stats
     const complianceStats = await db.getPolicyComplianceStats(finalUserId);
     
+    // Get spending by category (for Sankey diagram)
+    const categorySpending = await db.getSpendingByCategory(finalUserId, 'monthly');
+    
     res.json({
       user: {
         id: user.id,
@@ -888,6 +960,12 @@ app.get('/api/dashboard', authenticate, async (req, res) => {
         weekly,
         monthly
       },
+      spendingByType: {
+        agentToMerchant: spendingByType.agentToMerchant,
+        agentToAgent: spendingByType.agentToAgent,
+        total: spendingByType.total
+      },
+      spendingByCategory: categorySpending,
       policies: {
         total: policies.length,
         enabled: policies.filter((p: any) => p.enabled).length,
@@ -1100,6 +1178,74 @@ app.delete('/api/users/:userId/policies/:policyId', authenticate, async (req, re
 });
 
 // ============================================================================
+// Approval Reviewer Management
+// ============================================================================
+
+// Get all approval reviewers
+app.get('/api/reviewers', authenticate, async (req, res) => {
+  try {
+    const reviewers = await db.getApprovalReviewers();
+    res.json({ reviewers });
+  } catch (error: any) {
+    console.error('Get reviewers error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add approval reviewer
+app.post('/api/reviewers', authenticate, async (req, res) => {
+  try {
+    const { user_id, role = 'reviewer' } = req.body;
+    
+    if (!user_id) {
+      return res.status(400).json({ error: 'user_id is required' });
+    }
+    
+    const user = await db.getUserById(user_id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    await db.addApprovalReviewer(user_id, role);
+    res.json({ message: 'Reviewer added successfully' });
+  } catch (error: any) {
+    console.error('Add reviewer error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update reviewer role
+app.put('/api/reviewers/:userId', authenticate, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { role } = req.body;
+    
+    if (!role) {
+      return res.status(400).json({ error: 'role is required' });
+    }
+    
+    await db.updateReviewerRole(userId, role);
+    res.json({ message: 'Reviewer role updated successfully' });
+  } catch (error: any) {
+    console.error('Update reviewer error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remove approval reviewer
+app.delete('/api/reviewers/:userId', authenticate, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    await db.removeApprovalReviewer(userId);
+    res.json({ message: 'Reviewer removed successfully' });
+  } catch (error: any) {
+    console.error('Remove reviewer error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
 // User-Specific JWT Token Generation (for ChatGPT Authentication)
 // ============================================================================
 
@@ -1185,7 +1331,7 @@ app.post('/api/auth/generate-token', async (req, res) => {
  */
 app.post('/api/auth/create-user', async (req, res) => {
   try {
-    const { email, name } = req.body;
+    const { email, name, role } = req.body;
 
     if (!email) {
       return res.status(400).json({
@@ -1195,6 +1341,22 @@ app.post('/api/auth/create-user', async (req, res) => {
 
     // Create or get user in database
     const user = await db.createOrGetUser(email, name);
+    
+    // Set user role (default to 'admin' for policy manager access)
+    const userRole = role || 'admin';
+    
+    // Check if user already has a role
+    const existingUser = await db.getUserByEmail(email);
+    const hasRole = existingUser && (existingUser as any).role && (existingUser as any).role !== 'user';
+    
+    // Only update role if user doesn't have one or if explicitly provided
+    if (!hasRole || role) {
+      await db.addApprovalReviewer(user.id, userRole);
+      console.log(`✅ User ${email} assigned role: ${userRole}`);
+    }
+
+    // Get updated user with role
+    const updatedUser = await db.getUserByEmail(email);
 
     // Assign all active policies to new users
     try {
@@ -1253,8 +1415,9 @@ app.post('/api/auth/create-user', async (req, res) => {
         email: user.email,
         name: user.name,
         wallet: walletInfo,
+        role: (updatedUser as any)?.role || userRole,
       },
-      message: user.name ? 'User created/retrieved successfully' : 'User created/retrieved successfully',
+      message: 'User created/retrieved successfully',
     });
   } catch (error: any) {
     console.error('Create user error:', error);
