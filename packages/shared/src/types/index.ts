@@ -100,10 +100,9 @@ export interface PurchaseRequest {
   dayOfWeek?: number; // 0-6, Sunday = 0
   recipientAgent?: string;
   purpose?: string;
-  // NEW: Agent-to-agent specific fields
+  // Agent-to-agent specific fields
   buyerAgentId?: string;
   recipientAgentId?: string;
-  serviceType?: string;
 }
 
 // NEW: Agent Registry Types
