@@ -14,15 +14,16 @@ const db = new DB(process.env.DATABASE_URL || './data/shopping.db');
 // Seed admin user from environment variable (required for authentication)
 const adminEmail = process.env.ADMIN_EMAIL || 'admin@example.com';
 const adminName = process.env.ADMIN_NAME || 'Admin';
-try {
-  const user = await db.createOrGetUser(adminEmail, adminName);
-  console.log(`✓ Admin user ready: ${adminEmail} (ID: ${user.id})`);
-  // Ensure admin role
-  db.db.prepare(`UPDATE users SET role = 'admin', updated_at = ? WHERE id = ?`)
-    .run(new Date().toISOString(), user.id);
-} catch (e) {
-  console.log('Error seeding admin user:', e);
-}
+(async () => {
+  try {
+    const user = await db.createOrGetUser(adminEmail, adminName);
+    console.log(`✓ Admin user ready: ${adminEmail} (ID: ${user.id})`);
+    db.db.prepare(`UPDATE users SET role = 'admin', updated_at = ? WHERE id = ?`)
+      .run(new Date().toISOString(), user.id);
+  } catch (e) {
+    console.log('Error seeding admin user:', e);
+  }
+})();
 
 const defaultPolicies: Policy[] = [
   // ============================================
