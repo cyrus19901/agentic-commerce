@@ -36,15 +36,23 @@ export class DB {
   }
 
   private initialize() {
+    // Users table with GUID primary key
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         email TEXT UNIQUE NOT NULL,
         name TEXT,
+        role TEXT NOT NULL DEFAULT 'user',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
 
+      CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+      CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+    `);
+
+    // Policies table with GUID primary key
+    this.db.exec(`
       CREATE TABLE IF NOT EXISTS policies (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -54,29 +62,82 @@ export class DB {
         conditions TEXT NOT NULL,
         rules TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        CHECK (enabled IN (0, 1)),
+        CHECK (type IN ('budget', 'transaction', 'merchant', 'category', 'time', 'agent', 'purpose', 'composite'))
       );
 
+      CREATE INDEX IF NOT EXISTS idx_policies_enabled_priority ON policies(enabled, priority DESC);
+      CREATE INDEX IF NOT EXISTS idx_policies_type ON policies(type);
+    `);
+
+    // User-Policy junction table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS user_policies (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        policy_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (policy_id) REFERENCES policies(id) ON DELETE CASCADE,
+        UNIQUE(user_id, policy_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_user_policies_user_id ON user_policies(user_id);
+      CREATE INDEX IF NOT EXISTS idx_user_policies_policy_id ON user_policies(policy_id);
+    `);
+
+    // Purchase attempts table with GUID primary key (OPTIMIZED)
+    this.db.exec(`
       CREATE TABLE IF NOT EXISTS purchase_attempts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
         product_id TEXT NOT NULL,
         product_name TEXT,
         amount REAL NOT NULL,
         merchant TEXT NOT NULL,
         category TEXT,
+        transaction_type TEXT NOT NULL DEFAULT 'agent-to-merchant',
         allowed INTEGER NOT NULL,
-        requires_approval INTEGER DEFAULT 0,
+        requires_approval INTEGER NOT NULL DEFAULT 0,
+        approval_status TEXT,
         policy_results TEXT NOT NULL,
         checkout_method TEXT DEFAULT 'traditional',
-        timestamp TEXT NOT NULL
+        payment_status TEXT,
+        payment_id TEXT,
+        timestamp TEXT NOT NULL,
+        approved_at TEXT,
+        approved_by TEXT,
+        CHECK (allowed IN (0, 1)),
+        CHECK (requires_approval IN (0, 1)),
+        CHECK (transaction_type IN ('agent-to-merchant', 'agent-to-agent')),
+        CHECK (approval_status IS NULL OR approval_status IN ('pending', 'approved', 'rejected')),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
       );
 
-      CREATE INDEX IF NOT EXISTS idx_user_timestamp 
-        ON purchase_attempts(user_id, timestamp);
-      
-      CREATE INDEX IF NOT EXISTS idx_users_email 
-        ON users(email);
+      CREATE INDEX IF NOT EXISTS idx_purchase_user_timestamp ON purchase_attempts(user_id, timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_purchase_transaction_type ON purchase_attempts(transaction_type);
+      CREATE INDEX IF NOT EXISTS idx_purchase_allowed ON purchase_attempts(allowed);
+      CREATE INDEX IF NOT EXISTS idx_purchase_user_type_timestamp ON purchase_attempts(user_id, transaction_type, allowed, timestamp DESC);
+    `);
+
+    // Approval workflow table (for future use)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS approval_workflow (
+        id TEXT PRIMARY KEY,
+        purchase_id TEXT NOT NULL,
+        reviewer_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        comment TEXT,
+        timestamp TEXT NOT NULL,
+        FOREIGN KEY (purchase_id) REFERENCES purchase_attempts(id) ON DELETE CASCADE,
+        FOREIGN KEY (reviewer_id) REFERENCES users(id) ON DELETE CASCADE,
+        CHECK (action IN ('approved', 'rejected', 'flagged'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_approval_purchase_id ON approval_workflow(purchase_id);
+      CREATE INDEX IF NOT EXISTS idx_approval_reviewer_id ON approval_workflow(reviewer_id);
     `);
   }
 
@@ -93,7 +154,7 @@ export class DB {
     }));
   }
 
-  async getUserSpending(userId: string, period: 'daily' | 'weekly' | 'monthly'): Promise<number> {
+  async getUserSpending(userId: string, period: 'daily' | 'weekly' | 'monthly', transactionType?: 'agent-to-merchant' | 'agent-to-agent'): Promise<number> {
     const now = new Date();
     let startDate: Date;
 
@@ -111,58 +172,129 @@ export class DB {
         break;
     }
 
-    const result = this.db.prepare(`
+    let query = `
       SELECT COALESCE(SUM(amount), 0) as total
       FROM purchase_attempts
       WHERE user_id = ? AND allowed = 1 AND timestamp >= ?
-    `).get(userId, startDate.toISOString());
+    `;
+    
+    const params: any[] = [userId, startDate.toISOString()];
+    
+    // Filter by transaction type if specified
+    if (transactionType) {
+      // Check if transaction_type column exists
+      try {
+        this.db.prepare('SELECT transaction_type FROM purchase_attempts LIMIT 1').get();
+        query += ' AND transaction_type = ?';
+        params.push(transactionType);
+      } catch (e) {
+        // Column doesn't exist, can't filter by type
+      }
+    }
 
+    const result = this.db.prepare(query).get(...params);
     return result.total;
   }
 
-  async recordPurchaseAttempt(attempt: any): Promise<void> {
-    // Check if requires_approval column exists, if not, add it
-    try {
-      this.db.prepare('SELECT requires_approval FROM purchase_attempts LIMIT 1').get();
-    } catch (e) {
-      // Column doesn't exist, add it
-      try {
-        this.db.prepare('ALTER TABLE purchase_attempts ADD COLUMN requires_approval INTEGER DEFAULT 0').run();
-        this.db.prepare('ALTER TABLE purchase_attempts ADD COLUMN product_name TEXT').run();
-      } catch (alterError) {
-        // Column might already exist, ignore
-      }
+  /**
+   * Get spending breakdown by transaction type (Agent-to-Merchant vs Agent-to-Agent)
+   */
+  async getSpendingByTransactionType(userId: string, period: 'daily' | 'weekly' | 'monthly'): Promise<{
+    agentToMerchant: number;
+    agentToAgent: number;
+    total: number;
+  }> {
+    const [a2m, a2a, total] = await Promise.all([
+      this.getUserSpending(userId, period, 'agent-to-merchant'),
+      this.getUserSpending(userId, period, 'agent-to-agent'),
+      this.getUserSpending(userId, period),
+    ]);
+
+    return {
+      agentToMerchant: a2m,
+      agentToAgent: a2a,
+      total,
+    };
+  }
+
+  async getSpendingByCategory(userId: string, period: 'daily' | 'weekly' | 'monthly'): Promise<Array<{
+    category: string;
+    amount: number;
+    transactionType: 'agent-to-merchant' | 'agent-to-agent';
+    count: number;
+  }>> {
+    const { startDate } = this.getPeriodDates(period);
+    
+    const rows = this.db.prepare(`
+      SELECT 
+        category,
+        COALESCE(transaction_type, 'agent-to-merchant') as transaction_type,
+        SUM(amount) as total,
+        COUNT(*) as count
+      FROM purchase_attempts
+      WHERE user_id = ? 
+        AND allowed = 1 
+        AND timestamp >= ?
+        AND category IS NOT NULL
+      GROUP BY category, transaction_type
+      ORDER BY total DESC
+    `).all(userId, startDate.toISOString()) as any[];
+
+    return rows.map(row => ({
+      category: row.category,
+      amount: row.total,
+      transactionType: row.transaction_type,
+      count: row.count,
+    }));
+  }
+
+  private getPeriodDates(period: 'daily' | 'weekly' | 'monthly'): { startDate: Date } {
+    const now = new Date();
+    let startDate: Date;
+
+    switch (period) {
+      case 'daily':
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        break;
+      case 'weekly':
+        startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case 'monthly':
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        break;
     }
 
-    // Check if checkout_method column exists
-    try {
-      this.db.prepare('SELECT checkout_method FROM purchase_attempts LIMIT 1').get();
-    } catch (e) {
-      // Column doesn't exist, add it
-      try {
-        this.db.prepare('ALTER TABLE purchase_attempts ADD COLUMN checkout_method TEXT DEFAULT "traditional"').run();
-      } catch (alterError) {
-        // Column might already exist, ignore
-      }
-    }
+    return { startDate };
+  }
+
+  async recordPurchaseAttempt(attempt: any): Promise<string> {
+    // Generate GUID for purchase ID
+    const purchaseId = `purchase-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
 
     this.db.prepare(`
       INSERT INTO purchase_attempts 
-      (user_id, product_id, product_name, amount, merchant, category, allowed, requires_approval, policy_results, checkout_method, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, user_id, product_id, product_name, amount, merchant, category, transaction_type, allowed, requires_approval, approval_status, policy_results, checkout_method, payment_status, payment_id, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
+      purchaseId,
       attempt.userId,
       attempt.productId,
       attempt.productName || null,
       attempt.amount,
       attempt.merchant,
       attempt.category || null,
+      attempt.transactionType || 'agent-to-merchant',
       attempt.allowed ? 1 : 0,
       attempt.requiresApproval ? 1 : 0,
+      attempt.requiresApproval ? 'pending' : null,
       JSON.stringify(attempt.policyCheckResults || []),
       attempt.checkoutMethod || 'traditional',
+      attempt.paymentStatus || null,
+      attempt.paymentId || null,
       new Date().toISOString()
     );
+
+    return purchaseId;
   }
 
   async createPolicy(policy: Policy): Promise<void> {
@@ -455,10 +587,10 @@ export class DB {
   /**
    * Get user by email
    */
-  async getUserByEmail(email: string): Promise<{ id: string; email: string; name?: string } | null> {
+  async getUserByEmail(email: string): Promise<{ id: string; email: string; name?: string; role?: string } | null> {
     const row = this.db.prepare('SELECT * FROM users WHERE email = ?').get(email) as any;
     if (!row) return null;
-    return { id: row.id, email: row.email, name: row.name || undefined };
+    return { id: row.id, email: row.email, name: row.name || undefined, role: row.role || 'user' };
   }
 
   /**
