@@ -26,7 +26,7 @@ export class PolicyService {
     }
 
     for (const policy of policies) {
-      const result = await this.checkPolicy(policy, request);
+      const result = await this.checkPolicy(policy, request, request.transactionType || 'agent-to-merchant');
       matchedPolicies.push({
         id: policy.id,
         name: policy.name,
