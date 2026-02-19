@@ -166,6 +166,39 @@ export class DB {
       CREATE INDEX IF NOT EXISTS idx_wallet_user_id ON user_wallets(user_id);
       CREATE INDEX IF NOT EXISTS idx_wallet_pubkey ON user_wallets(public_key);
     `);
+
+    // Run migrations to add columns that may be missing from older databases
+    this.runMigrations();
+  }
+
+  private runMigrations() {
+    const migrations: Array<{ table: string; column: string; definition: string }> = [
+      // policies table migrations
+      { table: 'policies', column: 'transaction_types', definition: `TEXT NOT NULL DEFAULT '["agent-to-merchant"]'` },
+      // purchase_attempts table migrations
+      { table: 'purchase_attempts', column: 'requires_approval', definition: 'INTEGER DEFAULT 0' },
+      { table: 'purchase_attempts', column: 'product_name', definition: 'TEXT' },
+      { table: 'purchase_attempts', column: 'checkout_method', definition: 'TEXT DEFAULT "traditional"' },
+      { table: 'purchase_attempts', column: 'approval_status', definition: 'TEXT DEFAULT NULL' },
+      { table: 'purchase_attempts', column: 'transaction_type', definition: 'TEXT DEFAULT "agent-to-merchant"' },
+      { table: 'purchase_attempts', column: 'payment_method', definition: 'TEXT DEFAULT "stripe"' },
+      { table: 'purchase_attempts', column: 'blockchain_tx_signature', definition: 'TEXT' },
+      // users table migrations
+      { table: 'users', column: 'role', definition: `TEXT NOT NULL DEFAULT 'user'` },
+    ];
+
+    for (const { table, column, definition } of migrations) {
+      try {
+        this.db.prepare(`SELECT ${column} FROM ${table} LIMIT 1`).get();
+      } catch {
+        try {
+          this.db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+          console.log(`✓ Migration: added ${table}.${column}`);
+        } catch {
+          // Column may already exist in a different form, ignore
+        }
+      }
+    }
   }
 
   async getActivePolicies(userId?: string): Promise<Policy[]> {
