@@ -49,6 +49,13 @@ export interface Policy {
     blockedAgentTypes?: string[];
     allowedRecipientAgents?: string[];
     blockedRecipientAgents?: string[];
+    allowedRecipientAgentTypes?: string[];
+    blockedRecipientAgentTypes?: string[];
+    // Service-based rules (for agent-to-agent)
+    allowedServiceTypes?: string[];
+    blockedServiceTypes?: string[];
+    allowedServiceCategories?: string[];
+    blockedServiceCategories?: string[];
     // Purpose-based rules
     allowedPurposes?: string[];
     blockedPurposes?: string[];
@@ -84,8 +91,8 @@ export interface PurchaseRequest {
   price: number;
   merchant: string;
   category?: string;
-  // NEW: Transaction type
   transactionType?: TransactionType;
+  serviceType?: string;
   // Additional fields for policy conditions
   agentName?: string;
   agentType?: string;

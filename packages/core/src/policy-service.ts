@@ -4,6 +4,70 @@ import { Policy, PolicyCheckResult, PurchaseRequest } from '@agentic-commerce/sh
 export class PolicyService {
   constructor(private db: DB) {}
 
+  /**
+   * READ-ONLY policy check (does NOT record attempt)
+   * Use this for preliminary checks before actual purchase
+   */
+  async checkPolicyOnly(request: PurchaseRequest): Promise<PolicyCheckResult> {
+    const policies = await this.db.getActivePolicies(request.userId);
+    const matchedPolicies: PolicyCheckResult['matchedPolicies'] = [];
+    let allowed = true;
+    let reason: string | undefined;
+    let requiresApproval = false;
+    let flaggedForReview = false;
+
+    // If no policies, deny by default for safety
+    if (policies.length === 0) {
+      return {
+        allowed: false,
+        reason: 'No policies configured',
+        matchedPolicies: [],
+      };
+    }
+
+    for (const policy of policies) {
+      const result = await this.checkPolicy(policy, request);
+      matchedPolicies.push({
+        id: policy.id,
+        name: policy.name,
+        passed: result.passed,
+        reason: result.reason,
+      });
+
+      if (!result.passed) {
+        allowed = false;
+        reason = result.reason;
+        // Check if this policy requires approval
+        if ((result as any).requiresApproval) {
+          requiresApproval = true;
+        }
+        if ((result as any).flaggedForReview) {
+          flaggedForReview = true;
+        }
+        // Don't break if it requires approval - we want to check all policies
+        // But break for deny actions
+        if (!(result as any).requiresApproval && !(result as any).flaggedForReview) {
+          break;
+        }
+      } else if ((result as any).flaggedForReview) {
+        flaggedForReview = true;
+      }
+    }
+
+    // NO RECORDING - just return the check result
+    return { 
+      allowed, 
+      reason, 
+      requiresApproval: requiresApproval || undefined,
+      flaggedForReview: flaggedForReview || undefined,
+      matchedPolicies 
+    };
+  }
+
+  /**
+   * Full policy check WITH recording (for actual purchases)
+   * Use this only during actual checkout/purchase flow
+   */
   async checkPurchase(request: PurchaseRequest): Promise<PolicyCheckResult> {
     const policies = await this.db.getActivePolicies(request.userId);
     const matchedPolicies: PolicyCheckResult['matchedPolicies'] = [];
@@ -80,6 +144,7 @@ export class PolicyService {
       amount: request.price,
       merchant: request.merchant,
       category: request.category,
+      transactionType: (request as any).transactionType || 'agent-to-merchant', // NEW: Include transaction type
       allowed,
       requiresApproval: requiresApproval || false,
       policyCheckResults: matchedPolicies,
