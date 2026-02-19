@@ -232,6 +232,58 @@ export class DB {
     return result.total;
   }
 
+  async getSpendingByTransactionType(userId: string, period: 'daily' | 'weekly' | 'monthly'): Promise<{
+    agentToMerchant: number;
+    agentToAgent: number;
+    total: number;
+  }> {
+    const [a2m, a2a, total] = await Promise.all([
+      this.getUserSpending(userId, period, 'agent-to-merchant'),
+      this.getUserSpending(userId, period, 'agent-to-agent'),
+      this.getUserSpending(userId, period),
+    ]);
+    return { agentToMerchant: a2m, agentToAgent: a2a, total };
+  }
+
+  async getSpendingByCategory(userId: string, period: 'daily' | 'weekly' | 'monthly'): Promise<Array<{
+    category: string;
+    amount: number;
+    transactionCount: number;
+  }>> {
+    const now = new Date();
+    let startDate: Date;
+    switch (period) {
+      case 'daily':
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        break;
+      case 'weekly':
+        startDate = new Date(now);
+        startDate.setDate(now.getDate() - now.getDay());
+        startDate.setHours(0, 0, 0, 0);
+        break;
+      case 'monthly':
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        break;
+    }
+
+    const rows = this.db.prepare(`
+      SELECT 
+        COALESCE(category, 'Uncategorized') as category,
+        SUM(amount) as amount,
+        COUNT(*) as transactionCount
+      FROM purchase_attempts
+      WHERE user_id = ? AND allowed = 1 AND timestamp >= ?
+      GROUP BY COALESCE(category, 'Uncategorized')
+      ORDER BY amount DESC
+    `).all(userId, startDate.toISOString());
+
+    return rows.map((row: any) => ({
+      category: row.category,
+      amount: row.amount,
+      transactionCount: row.transactionCount,
+    }));
+  }
+
   async recordPurchaseAttempt(attempt: any): Promise<number> {
     // Ensure all new columns exist
     const columnsToAdd = [
