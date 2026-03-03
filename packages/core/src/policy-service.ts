@@ -15,6 +15,7 @@ export class PolicyService {
     let reason: string | undefined;
     let requiresApproval = false;
     let flaggedForReview = false;
+    const transactionType = request.transactionType || 'agent-to-merchant';
 
     // If no policies, deny by default for safety
     if (policies.length === 0) {
@@ -25,8 +26,22 @@ export class PolicyService {
       };
     }
 
-    for (const policy of policies) {
-      const result = await this.checkPolicy(policy, request, request.transactionType || 'agent-to-merchant');
+    // Filter policies by transaction type (same logic as checkPurchase)
+    const applicablePolicies = policies.filter(policy => {
+      if (!policy.transactionTypes || policy.transactionTypes.length === 0) return true;
+      return policy.transactionTypes.includes(transactionType) || policy.transactionTypes.includes('all');
+    });
+
+    if (applicablePolicies.length === 0) {
+      return {
+        allowed: false,
+        reason: `No policies configured for ${transactionType} transactions`,
+        matchedPolicies: [],
+      };
+    }
+
+    for (const policy of applicablePolicies) {
+      const result = await this.checkPolicy(policy, request, transactionType);
       matchedPolicies.push({
         id: policy.id,
         name: policy.name,
@@ -159,7 +174,57 @@ export class PolicyService {
     };
   }
 
-  private async checkPolicy(policy: Policy, request: PurchaseRequest, transactionType: string) {
+  /**
+   * Simulate a single policy against a transaction in-memory.
+   * Does NOT read from or write to the database.
+   * currentSpending defaults to 0 for budget policies.
+   */
+  async simulatePolicy(
+    policy: Policy,
+    request: PurchaseRequest,
+    currentSpending: number = 0,
+  ): Promise<PolicyCheckResult> {
+    const transactionType = request.transactionType || 'agent-to-merchant';
+
+    // Check if this policy applies to the given transaction type
+    if (policy.transactionTypes && policy.transactionTypes.length > 0) {
+      const applies =
+        policy.transactionTypes.includes(transactionType) ||
+        policy.transactionTypes.includes('all');
+      if (!applies) {
+        return {
+          allowed: true,
+          reason: `Policy does not apply to ${transactionType} transactions`,
+          matchedPolicies: [
+            {
+              id: policy.id,
+              name: policy.name,
+              passed: true,
+              reason: 'Transaction type not in scope',
+            },
+          ],
+        };
+      }
+    }
+
+    const result = await this.checkPolicy(policy, request, transactionType, currentSpending);
+    return {
+      allowed: result.passed,
+      reason: result.reason,
+      requiresApproval: (result as any).requiresApproval || undefined,
+      flaggedForReview: (result as any).flaggedForReview || undefined,
+      matchedPolicies: [
+        {
+          id: policy.id,
+          name: policy.name,
+          passed: result.passed,
+          reason: result.reason,
+        },
+      ],
+    };
+  }
+
+  private async checkPolicy(policy: Policy, request: PurchaseRequest, transactionType: string, spendingOverride?: number) {
     let hasMatchingCondition = false;
     
     // Check policy conditions - serviceType (for agent-to-agent)
@@ -298,8 +363,10 @@ export class PolicyService {
         // Budget limit is specified, check it
         // Skip budget aggregation for 'transaction' period (per-transaction limits handled elsewhere)
         if (policy.rules.period !== 'transaction') {
-          // Pass transactionType to filter spending correctly (e.g., only count agent-to-agent for A2A policies)
-          const spent = await this.db.getUserSpending(request.userId, policy.rules.period!, transactionType as 'agent-to-merchant' | 'agent-to-agent');
+          // Use spendingOverride for simulation; otherwise query the DB
+          const spent = spendingOverride !== undefined
+            ? spendingOverride
+            : await this.db.getUserSpending(request.userId, policy.rules.period!, transactionType as 'agent-to-merchant' | 'agent-to-agent');
           console.log(`💰 Budget check: spent $${spent} of $${policy.rules.maxAmount} (${policy.rules.period}, ${transactionType})`);
           if (spent + request.price > policy.rules.maxAmount) {
             return {

@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
+import path from 'path';
 import { DB } from '@agentic-commerce/database';
 import { PolicyService } from '@agentic-commerce/core';
 import { EtsyClient, PaymentService, StripeAgentService, FacilitatorService } from '@agentic-commerce/integrations';
@@ -23,7 +24,8 @@ declare global {
   }
 }
 
-dotenv.config();
+// Load .env from the monorepo root (process.cwd() is packages/api when run via npm workspaces)
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -329,6 +331,64 @@ app.post('/api/policy/check', authenticate, async (req, res) => {
     });
     
     console.log('Policy check response:', JSON.stringify(result, null, 2));
+
+    // Log event (fire-and-forget)
+    db.logEvent({
+      userId: finalUserId,
+      eventType: result.allowed ? 'policy_evaluated' : result.requiresApproval ? 'approval_requested' : 'purchase_blocked',
+      source: 'api',
+      productName: product_id,
+      category,
+      merchant,
+      amount: price,
+      outcome: result.allowed ? 'approved' : result.requiresApproval ? 'pending_approval' : 'blocked',
+      blockReason: result.allowed ? undefined : result.reason,
+      metadata: { transaction_type, service_type, matched_policies: result.matchedPolicies?.length },
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Simulate a policy against a transaction without touching the database.
+ * Accepts a full policy object + transaction details; returns evaluation result.
+ */
+app.post('/api/policy/simulate', authenticate, async (req, res) => {
+  try {
+    const {
+      policy,
+      transaction,
+      current_spending = 0,
+    } = req.body;
+
+    if (!policy || typeof policy !== 'object') {
+      return res.status(400).json({ error: 'policy object is required' });
+    }
+    if (!transaction || typeof transaction.price !== 'number') {
+      return res.status(400).json({ error: 'transaction.price (number) is required' });
+    }
+
+    const request = {
+      userId: req.user?.userId || 'simulate-user',
+      productId: transaction.product_id || 'simulation',
+      price: transaction.price,
+      merchant: transaction.merchant || 'Unknown Merchant',
+      category: transaction.category || 'General',
+      transactionType: transaction.transaction_type || 'agent-to-merchant',
+      agentName: transaction.agent_name,
+      agentType: transaction.agent_type,
+      serviceType: transaction.service_type,
+      recipientAgentId: transaction.recipient_agent_id,
+      buyerAgentId: transaction.buyer_agent_id,
+      purpose: transaction.purpose,
+      timeOfDay: transaction.time_of_day,
+      dayOfWeek: transaction.day_of_week,
+    };
+
+    const result = await policyService.simulatePolicy(policy, request, current_spending);
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -449,6 +509,18 @@ app.post('/api/approvals/:id/approve', authenticate, async (req, res) => {
       // Still mark as approved, but note checkout failure
     }
     
+    db.logEvent({
+      userId: purchase.userId,
+      eventType: 'approval_resolved',
+      source: 'api',
+      productName: purchase.productName,
+      category: purchase.category,
+      merchant: purchase.merchant,
+      amount: purchase.amount,
+      outcome: 'approved',
+      metadata: { purchase_id: purchaseId, approved_by: req.user?.userId },
+    });
+
     res.json({ 
       success: true,
       message: 'Purchase approved and checkout initiated',
@@ -492,6 +564,19 @@ app.post('/api/approvals/:id/reject', authenticate, async (req, res) => {
     const { reason } = req.body;
     await db.rejectPurchase(purchaseId, reason || 'No reason provided');
     
+    db.logEvent({
+      userId: purchase.userId,
+      eventType: 'approval_resolved',
+      source: 'api',
+      productName: purchase.productName,
+      category: purchase.category,
+      merchant: purchase.merchant,
+      amount: purchase.amount,
+      outcome: 'rejected',
+      blockReason: reason || 'No reason provided',
+      metadata: { purchase_id: purchaseId, rejected_by: req.user?.userId },
+    });
+
     res.json({ 
       success: true,
       message: 'Purchase rejected',
@@ -586,7 +671,19 @@ app.post('/api/checkout/initiate', authenticate, async (req, res) => {
 
     // Handle policy check results
     if (!policyCheck.allowed && !policyCheck.requiresApproval) {
-      // Purchase is blocked (denied)
+      // Log blocked purchase
+      db.logEvent({
+        userId: finalUserId,
+        eventType: 'purchase_blocked',
+        source: 'chatgpt',
+        productName: product_id,
+        category,
+        merchant,
+        amount,
+        outcome: 'blocked',
+        blockReason: policyCheck.reason,
+        metadata: { transaction_type: finalTransactionType, matched_policies: policyCheck.matchedPolicies?.length },
+      });
       return res.status(403).json({
         error: 'Purchase not allowed',
         reason: policyCheck.reason,
@@ -641,6 +738,18 @@ app.post('/api/checkout/initiate', authenticate, async (req, res) => {
       });
       console.log(`🟡 Purchase requires approval - Purchase ID: ${purchaseId}, User: ${finalUserId}, Product: ${product_id}, Amount: $${amount}`);
 
+      db.logEvent({
+        userId: finalUserId,
+        eventType: 'approval_requested',
+        source: 'chatgpt',
+        productName: finalProductName,
+        category: finalCategory || category,
+        merchant: finalMerchant || merchant,
+        amount,
+        outcome: 'pending_approval',
+        metadata: { purchase_id: purchaseId, transaction_type: finalTransactionType },
+      });
+
       return res.json({
         requiresApproval: true,
         purchaseId,
@@ -683,6 +792,17 @@ app.post('/api/checkout/initiate', authenticate, async (req, res) => {
       })),
     });
     console.log(`✅ Auto-approved purchase for user ${finalUserId}, product ${product_id}, amount $${amount}`);
+    db.logEvent({
+      userId: finalUserId,
+      eventType: 'purchase_initiated',
+      source: 'chatgpt',
+      productName: finalProductName,
+      category: finalCategory || category,
+      merchant: finalMerchant || merchant,
+      amount,
+      outcome: 'approved',
+      metadata: { transaction_type: finalTransactionType, checkout_session: checkout.sessionId },
+    });
 
     res.json({
       checkout_session_id: checkout.sessionId,
@@ -726,6 +846,17 @@ app.post('/api/checkout/complete', authenticate, async (req, res) => {
         policyCheckResults: [],
       });
       console.log(`Recorded completed purchase for user ${finalUserId}, product ${product_id}`);
+      db.logEvent({
+        userId: finalUserId,
+        eventType: 'purchase_completed',
+        source: 'chatgpt',
+        productName: product_name,
+        category,
+        merchant,
+        amount: amount || status.amountTotal || 0,
+        outcome: 'completed',
+        metadata: { session_id, payment_status: status.paymentStatus },
+      });
     }
 
     res.json({
@@ -1361,17 +1492,14 @@ app.post('/api/auth/create-user', async (req, res) => {
 
     // Assign all active policies to new users
     try {
-      const allPolicies = db.db.prepare('SELECT id FROM policies WHERE enabled = 1').all() as any[];
+      const { rows: allPolicies } = await db.pool.query('SELECT id FROM policies WHERE enabled = true');
       console.log(`📋 Assigning ${allPolicies.length} policies to user ${user.email}`);
-      
       for (const policy of allPolicies) {
-        db.db.prepare('INSERT OR IGNORE INTO user_policies (user_id, policy_id, active) VALUES (?, ?, 1)')
-          .run(user.id, policy.id);
+        await db.assignPolicyToUser(user.id, policy.id);
       }
       console.log(`✅ Assigned policies to ${user.email}`);
     } catch (policyError: any) {
       console.error('⚠️  Failed to assign policies:', policyError.message);
-      // Don't fail user creation if policy assignment fails
     }
 
     // Create Solana wallet for new users
@@ -1429,6 +1557,62 @@ app.post('/api/auth/create-user', async (req, res) => {
   }
 });
 
+// OTP: request a verification code (no auth required)
+app.post('/api/auth/request-otp', async (req, res) => {
+  try {
+    const { email, name } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Ensure user exists
+    const namePart = name || normalizedEmail.split('@')[0];
+    const userName = namePart.charAt(0).toUpperCase() + namePart.slice(1).replace(/[._-]/g, ' ');
+    await db.createOrGetUser(normalizedEmail, userName);
+
+    // Generate 6-digit OTP and store in DB
+    const { randomInt } = await import('crypto');
+    const otp = randomInt(100000, 999999).toString();
+    const expires = new Date(Date.now() + 10 * 60 * 1000);
+    await db.setVerificationCode(normalizedEmail, otp, expires);
+
+    console.log(`[OTP] Generated for ${normalizedEmail}: ${otp}`);
+
+    // Return OTP so the calling server (frontend) can email it to the user.
+    // This endpoint should only be called server-to-server, never from the browser.
+    res.json({ success: true, message: 'Verification code generated', email: normalizedEmail, otp });
+  } catch (error: any) {
+    console.error('Request OTP error:', error);
+    res.status(500).json({ error: 'Failed to generate verification code', details: error.message });
+  }
+});
+
+// OTP: verify the code and return user info (no auth required)
+app.post('/api/auth/verify-otp', async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) return res.status(400).json({ error: 'Email and verification code are required' });
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const result = await db.verifyAndClearCode(normalizedEmail, otp.trim());
+
+    if (!result.valid) {
+      return res.status(400).json({ error: result.reason });
+    }
+
+    const user = await db.getUserByEmail(normalizedEmail);
+    if (!user) return res.status(400).json({ error: 'User not found' });
+
+    res.json({
+      success: true,
+      user: { id: user.id, email: user.email, name: (user as any).name },
+    });
+  } catch (error: any) {
+    console.error('Verify OTP error:', error);
+    res.status(500).json({ error: 'Verification failed', details: error.message });
+  }
+});
+
 // Admin endpoint to initialize/re-run database setup
 app.post('/api/admin/db-setup', async (req, res) => {
   try {
@@ -1455,17 +1639,16 @@ app.post('/api/admin/db-setup', async (req, res) => {
     console.log('Setup output:', output);
     
     // Verify policies were created
-    const allPolicies = db.db.prepare('SELECT id, name FROM policies WHERE enabled = 1').all() as any[];
+    const { rows: allPolicies } = await db.pool.query('SELECT id, name FROM policies WHERE enabled = true');
     console.log(`Found ${allPolicies.length} policies`);
-    
+
     // Assign policies to all existing users
-    const allUsers = db.db.prepare('SELECT id, email FROM users').all() as any[];
+    const { rows: allUsers } = await db.pool.query('SELECT id, email FROM users');
     console.log(`Assigning to ${allUsers.length} users`);
-    
+
     for (const user of allUsers) {
       for (const policy of allPolicies) {
-        db.db.prepare('INSERT OR IGNORE INTO user_policies (user_id, policy_id, active) VALUES (?, ?, 1)')
-          .run(user.id, policy.id);
+        await db.assignPolicyToUser(user.id, policy.id);
       }
     }
     
@@ -1493,21 +1676,16 @@ app.post('/api/admin/assign-policies', async (req, res) => {
 
     if (!userId) {
       // Assign to all users
-      const allUsers = db.db.prepare('SELECT id, email FROM users').all() as any[];
-      const allPolicies = db.db.prepare('SELECT id FROM policies WHERE enabled = 1').all() as any[];
-      
+      const { rows: allUsers } = await db.pool.query('SELECT id, email FROM users');
+      const { rows: allPolicies } = await db.pool.query('SELECT id FROM policies WHERE enabled = true');
+
       console.log(`📋 Assigning ${allPolicies.length} policies to ${allUsers.length} users`);
-      
+
       let assignedCount = 0;
       for (const user of allUsers) {
         for (const policy of allPolicies) {
-          try {
-            db.db.prepare('INSERT OR IGNORE INTO user_policies (user_id, policy_id, active) VALUES (?, ?, 1)')
-              .run(user.id, policy.id);
-            assignedCount++;
-          } catch (e) {
-            // Ignore duplicates
-          }
+          await db.assignPolicyToUser(user.id, policy.id);
+          assignedCount++;
         }
         console.log(`✅ Assigned policies to ${user.email}`);
       }
@@ -1522,12 +1700,10 @@ app.post('/api/admin/assign-policies', async (req, res) => {
     }
 
     // Assign to specific user
-    const allPolicies = db.db.prepare('SELECT id FROM policies WHERE enabled = 1').all() as any[];
+    const { rows: allPolicies } = await db.pool.query('SELECT id FROM policies WHERE enabled = true');
     console.log(`📋 Assigning ${allPolicies.length} policies to user ${userId}`);
-    
     for (const policy of allPolicies) {
-      db.db.prepare('INSERT OR IGNORE INTO user_policies (user_id, policy_id, active) VALUES (?, ?, 1)')
-        .run(userId, policy.id);
+      await db.assignPolicyToUser(userId, policy.id);
     }
     
     res.json({
@@ -2112,6 +2288,77 @@ process.on('uncaughtException', (error) => {
   console.error('❌ Uncaught Exception:', error);
   process.exit(1);
 });
+
+// ============================================================================
+// User Activity & Profile Endpoints
+// ============================================================================
+
+app.get('/api/user/activity', authenticate, async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    const limit  = parseInt(req.query.limit as string) || 100;
+    const type   = req.query.event_type as string | undefined;
+    const since  = req.query.since as string | undefined;
+    const events = await db.getUserEvents(userId, { limit, eventType: type, since });
+    res.json({ userId, events, count: events.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/user/profile', authenticate, async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    let profile = await db.getUserProfile(userId);
+
+    if (!profile) {
+      await db.synthesizeUserProfile(userId);
+      profile = await db.getUserProfile(userId);
+    }
+
+    const user = await db.getUserByEmail((req.user as any).email || '');
+    res.json({ userId, profile, user: user ? { id: user.id, email: user.email, name: (user as any).name } : null });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/user/synthesize-profile', authenticate, async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    await db.synthesizeUserProfile(userId);
+    res.json({ success: true, profile: await db.getUserProfile(userId) });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin: all events across all users (for analytics dashboards)
+app.get('/api/admin/events', authenticate, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 500;
+    const since = req.query.since as string | undefined;
+    const events = await db.getAllUserEvents({ limit, since });
+    res.json({ events, count: events.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Nightly profile aggregation (runs every 24h, synthesizes all active users) ──
+const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+setInterval(async () => {
+  try {
+    console.log('🔄 Running nightly user profile synthesis...');
+    const users = await db.getAllUsers();
+    for (const user of users) {
+      await db.synthesizeUserProfile(user.id);
+    }
+    console.log(`✅ Profile synthesis complete for ${users.length} users`);
+  } catch (err: any) {
+    console.error('⚠️  Profile synthesis failed:', err.message);
+  }
+}, TWENTY_FOUR_HOURS);
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
