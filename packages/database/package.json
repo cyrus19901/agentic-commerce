@@ -8,7 +8,8 @@
     "dev": "tsc --watch",
     "db:migrate": "node-pg-migrate up -m migrations",
     "db:rollback": "node-pg-migrate down -m migrations",
-    "db:create": "node-pg-migrate create -m migrations -j js"
+    "db:create": "node-pg-migrate create -m migrations -j js",
+    "db:seed": "tsx src/setup.ts"
   },
   "dependencies": {
     "@agentic-commerce/shared": "*",
