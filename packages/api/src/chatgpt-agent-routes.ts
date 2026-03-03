@@ -247,6 +247,18 @@ export function createChatGPTAgentRoutes(
         });
       }
 
+      // Log the ChatGPT query (fire-and-forget)
+      db.logEvent({
+        userId: user.id,
+        eventType: 'chatgpt_query',
+        source: 'chatgpt',
+        intent: 'agent_service_request',
+        category: serviceType,
+        merchant: agentId,
+        rawInput: serviceParams ? JSON.stringify(serviceParams) : undefined,
+        metadata: { agent_id: agentId, service_type: serviceType, service_params: serviceParams },
+      });
+
       // Get or create user's wallet
       let walletData = await db.getUserWallet(user.id);
       if (!walletData) {

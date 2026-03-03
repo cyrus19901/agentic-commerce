@@ -1,15 +1,8 @@
 import { DB } from './index.js';
 import { Policy } from '@agentic-commerce/shared';
-import * as fs from 'fs';
-import * as path from 'path';
 
-// Ensure data directory exists
-const dataDir = path.resolve('./data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
 
-const db = new DB(process.env.DATABASE_URL || './data/shopping.db');
+const db = new DB();
 
 // Seed admin user from environment variable (required for authentication)
 const adminEmail = process.env.ADMIN_EMAIL || 'admin@example.com';
@@ -18,8 +11,7 @@ const adminName = process.env.ADMIN_NAME || 'Admin';
   try {
     const user = await db.createOrGetUser(adminEmail, adminName);
     console.log(`✓ Admin user ready: ${adminEmail} (ID: ${user.id})`);
-    db.db.prepare(`UPDATE users SET role = 'admin', updated_at = ? WHERE id = ?`)
-      .run(new Date().toISOString(), user.id);
+    await db.pool.query(`UPDATE users SET role = 'admin', updated_at = $1 WHERE id = $2`, [new Date(), user.id]);
   } catch (e) {
     console.log('Error seeding admin user:', e);
   }
@@ -600,16 +592,19 @@ for (const policy of defaultPolicies) {
 
 // Assign all policies to all existing users
 console.log('\n📋 Assigning policies to users...');
-const allUsers = db.db.prepare('SELECT id, email FROM users').all() as any[];
+const { rows: allUsers } = await db.pool.query('SELECT id, email FROM users');
 console.log(`Found ${allUsers.length} users`);
 
 for (const user of allUsers) {
   for (const policy of defaultPolicies) {
     try {
-      db.db.prepare('INSERT OR IGNORE INTO user_policies (user_id, policy_id, active) VALUES (?, ?, 1)')
-        .run(user.id, policy.id);
+      const id = `user-policy-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      await db.pool.query(
+        'INSERT INTO user_policies (id, user_id, policy_id, active) VALUES ($1, $2, $3, true) ON CONFLICT (user_id, policy_id) DO NOTHING',
+        [id, user.id, policy.id]
+      );
     } catch (e) {
-      // Ignore duplicate errors
+      // Ignore errors
     }
   }
   console.log(`✓ Assigned ${defaultPolicies.length} policies to ${user.email}`);
@@ -702,18 +697,21 @@ const agents = [
 
 for (const agent of agents) {
   try {
-    db.db.prepare(`
-      INSERT OR REPLACE INTO registered_agents (
-        id, agent_id, name, base_url, services, service_description, 
-        accepted_currencies, usdc_token_account, solana_pubkey, 
-        active, verified, owner_id, metadata, created_at, updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      agent.id, agent.agentId, agent.name, agent.baseUrl, agent.services,
-      agent.serviceDescription, agent.acceptedCurrencies, agent.usdcTokenAccount,
-      agent.solanaPubkey, agent.active, agent.verified, agent.ownerId,
-      agent.metadata, timestamp, timestamp
+    await db.pool.query(
+      `INSERT INTO registered_agents
+         (id, agent_id, name, base_url, services, service_description,
+          accepted_currencies, usdc_token_account, solana_pubkey,
+          active, verified, owner_id, metadata, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       ON CONFLICT (agent_id) DO UPDATE SET
+         name = EXCLUDED.name, base_url = EXCLUDED.base_url,
+         services = EXCLUDED.services, updated_at = EXCLUDED.updated_at`,
+      [
+        agent.id, agent.agentId, agent.name, agent.baseUrl, agent.services,
+        agent.serviceDescription, agent.acceptedCurrencies, agent.usdcTokenAccount,
+        agent.solanaPubkey, agent.active === 1, agent.verified === 1, agent.ownerId,
+        agent.metadata, timestamp, timestamp,
+      ]
     );
     console.log(`✓ Seeded agent: ${agent.name}`);
   } catch (e) {
@@ -1005,22 +1003,11 @@ const products = [
 
 for (const product of products) {
   try {
-    db.db.prepare(`
-      INSERT OR REPLACE INTO products (
-        id, name, price, description, merchant, category, image_url, 
-        created_at, updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      product.id,
-      product.name,
-      product.price,
-      product.description,
-      product.merchant,
-      product.category,
-      product.imageUrl,
-      timestamp,
-      timestamp
+    await db.pool.query(
+      `INSERT INTO products (id, name, price, description, merchant, category, image_url, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, price = EXCLUDED.price, updated_at = EXCLUDED.updated_at`,
+      [product.id, product.name, product.price, product.description, product.merchant, product.category, product.imageUrl, timestamp, timestamp]
     );
     console.log(`✓ Seeded product: ${product.name} ($${product.price})`);
   } catch (e) {

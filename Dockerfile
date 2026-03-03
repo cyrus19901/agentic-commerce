@@ -1,9 +1,6 @@
 # Multi-stage build for efficient image size
 FROM node:20-alpine AS builder
 
-# Install build dependencies for native modules
-RUN apk add --no-cache python3 make g++ sqlite
-
 WORKDIR /app
 
 # Copy package files
@@ -30,7 +27,7 @@ RUN npm run build --workspace=@agentic-commerce/shared && \
 # Production stage
 FROM node:20-alpine
 
-RUN apk add --no-cache sqlite wget
+RUN apk add --no-cache wget
 
 WORKDIR /app
 
@@ -39,12 +36,8 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/packages ./packages
 
-# Create data directory for SQLite and copy pre-seeded database
-RUN mkdir -p /app/data
-COPY packages/api/data/shopping.db /app/data/shopping.db
-
 # Copy entrypoint script
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
 # Expose port
@@ -57,4 +50,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
 # Start the application
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["npm", "start"]
-
