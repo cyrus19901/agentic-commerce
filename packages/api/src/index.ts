@@ -10,6 +10,7 @@ import { createAgentRoutes } from './agent-routes';
 import { createRegistryRoutes } from './registry-routes';
 import { createFacilitatorRoutes } from './facilitator-routes';
 import { createChatGPTAgentRoutes } from './chatgpt-agent-routes';
+import { createChatRoutes } from './chat-routes';
 
 // Extend Express Request type to include user
 declare global {
@@ -206,6 +207,9 @@ const authenticate = (req: any, res: any, next: any) => {
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy' });
 });
+
+// Local web chat UI that mirrors Custom GPT action flow
+app.use('/api/chat', createChatRoutes());
 
 // Debug endpoint - Check environment configuration
 app.get('/debug/env', (req, res) => {
@@ -904,6 +908,368 @@ app.use('/api/facilitator', createFacilitatorRoutes(facilitatorService));
 
 // Mount ChatGPT agent routes (simplified agent-to-agent for ChatGPT)
 app.use('/api/chatgpt-agent', createChatGPTAgentRoutes(db, policyService, facilitatorService));
+
+// ============================================================================
+// Funding Subaccounts (treasury-style virtual balances)
+// ============================================================================
+
+app.get('/api/funding/account', authenticate, async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+    const account = await db.createOrGetFundingAccountForUser(userId, 'USDC');
+    res.json({ account });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/funding/topup', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+
+    const actor = await db.getUserById(actorUserId);
+    const actorRole = (actor as any)?.role || 'user';
+    if (!['admin', 'manager'].includes(actorRole)) {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Only admin/manager can top up funding accounts' });
+    }
+
+    const { user_id, amount, idempotency_key } = req.body;
+    if (!user_id || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: 'user_id and positive amount are required' });
+    }
+    const result = await db.topUpFundingAccount({
+      userId: user_id,
+      amount: Number(amount),
+      currency: 'USDC',
+      idempotencyKey: idempotency_key,
+      referenceType: 'admin-topup',
+      referenceId: `topup_${Date.now()}`,
+      metadata: { by: actorUserId },
+    });
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// Organizations + Treasury (multi-tenant)
+// ============================================================================
+
+app.post('/api/orgs', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { name, slug, metadata } = req.body;
+    if (!name || !slug) {
+      return res.status(400).json({ error: 'name and slug are required' });
+    }
+    const org = await db.createOrganization({ name, slug, ownerUserId: actorUserId, metadata });
+    await db.createOrGetOrgTreasuryAccount(org.id, 'USDC');
+    res.status(201).json({ success: true, organization: org });
+  } catch (error: any) {
+    if (error.message?.includes('unique') || error.message?.includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Organization slug already exists' });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/orgs', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const organizations = await db.getUserOrganizations(actorUserId);
+    res.json({ organizations });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/orgs/:orgId/members', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const { user_id, role = 'member' } = req.body;
+    if (!user_id) return res.status(400).json({ error: 'user_id is required' });
+
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Only owner/admin can manage members' });
+    }
+
+    await db.addOrganizationMember({ orgId, userId: user_id, role, status: 'active' });
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/orgs/:orgId/treasury/topup', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const { amount, idempotency_key } = req.body;
+    if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: 'positive amount is required' });
+    }
+
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin', 'manager'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Insufficient org role for treasury top-up' });
+    }
+
+    const result = await db.topUpOrgTreasury({
+      orgId,
+      amount: Number(amount),
+      currency: 'USDC',
+      idempotencyKey: idempotency_key,
+      referenceType: 'org-topup',
+      referenceId: `org_topup_${Date.now()}`,
+      metadata: { by: actorUserId },
+    });
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/orgs/:orgId/treasury/allocate', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const { user_id, amount, idempotency_key } = req.body;
+    if (!user_id || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: 'user_id and positive amount are required' });
+    }
+
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin', 'manager'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Insufficient org role for allocation' });
+    }
+
+    const targetMembership = await db.getOrganizationMembership(orgId, user_id);
+    if (!targetMembership || targetMembership.status !== 'active') {
+      return res.status(400).json({ error: 'Target user is not an active member of this organization' });
+    }
+
+    const result = await db.allocateOrgTreasuryToUserFunding({
+      orgId,
+      userId: user_id,
+      amount: Number(amount),
+      currency: 'USDC',
+      idempotencyKey: idempotency_key,
+      metadata: { by: actorUserId },
+    });
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/orgs/:orgId/treasury/wallets', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN' });
+    }
+    const wallets = await db.listOrgTreasuryWallets(orgId);
+    res.json({ success: true, wallets });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/orgs/:orgId/treasury/wallets', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin', 'manager'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Insufficient org role for wallet create' });
+    }
+    const {
+      name,
+      address,
+      network,
+      asset,
+      priority,
+      status,
+      key_ciphertext,
+      kms_key_id,
+      key_version,
+      routing_policy,
+      metadata,
+    } = req.body || {};
+    if (!name || !address || !network || !asset) {
+      return res.status(400).json({ error: 'name, address, network, asset are required' });
+    }
+    const wallet = await db.createOrgTreasuryWallet({
+      orgId,
+      name,
+      address,
+      network,
+      asset,
+      priority: Number.isFinite(Number(priority)) ? Number(priority) : undefined,
+      status,
+      keyCiphertext: key_ciphertext,
+      kmsKeyId: kms_key_id,
+      keyVersion: key_version,
+      routingPolicy: routing_policy,
+      metadata,
+      createdBy: actorUserId,
+    });
+    res.status(201).json({ success: true, wallet });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/orgs/:orgId/treasury/wallets/:walletId', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId, walletId } = req.params;
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin', 'manager'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Insufficient org role for wallet update' });
+    }
+    const updates: any = {};
+    if (req.body.name !== undefined) updates.name = req.body.name;
+    if (req.body.status !== undefined) updates.status = req.body.status;
+    if (req.body.priority !== undefined) updates.priority = Number(req.body.priority);
+    if (req.body.key_ciphertext !== undefined) updates.keyCiphertext = req.body.key_ciphertext;
+    if (req.body.kms_key_id !== undefined) updates.kmsKeyId = req.body.kms_key_id;
+    if (req.body.key_version !== undefined) updates.keyVersion = req.body.key_version;
+    if (req.body.routing_policy !== undefined) updates.routingPolicy = req.body.routing_policy;
+    if (req.body.metadata !== undefined) updates.metadata = req.body.metadata;
+    if (req.body.last_rotated_at !== undefined) updates.lastRotatedAt = new Date(req.body.last_rotated_at);
+    await db.updateOrgTreasuryWallet(walletId, updates);
+    const wallet = await db.getOrgTreasuryWalletById(walletId);
+    res.json({ success: true, wallet });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/orgs/:orgId/treasury/wallets/:walletId/admins', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId, walletId } = req.params;
+    const { user_id, role = 'admin', status = 'active' } = req.body || {};
+    if (!user_id) return res.status(400).json({ error: 'user_id is required' });
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Only owner/admin can map wallet admins' });
+    }
+    await db.addOrgTreasuryWalletAdmin({ orgId, walletId, userId: user_id, role, status });
+    const admins = await db.listOrgTreasuryWalletAdmins(walletId);
+    res.json({ success: true, admins });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/orgs/:orgId/treasury/policy', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || membership.status !== 'active') return res.status(403).json({ error: 'FORBIDDEN' });
+    const policy = await db.getOrgTreasuryPolicy(orgId);
+    res.json({ success: true, policy });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/orgs/:orgId/treasury/policy', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin', 'manager'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Insufficient org role for policy update' });
+    }
+    await db.upsertOrgTreasuryPolicy(orgId, {
+      routingMode: req.body.routing_mode,
+      allowNetworks: req.body.allow_networks,
+      allowAssets: req.body.allow_assets,
+      perTxnLimitAtomic: req.body.per_txn_limit_atomic,
+      dailyLimitAtomic: req.body.daily_limit_atomic,
+      requireManualApprovalOverAtomic: req.body.require_manual_approval_over_atomic,
+      metadata: req.body.metadata,
+    });
+    const policy = await db.getOrgTreasuryPolicy(orgId);
+    res.json({ success: true, policy });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/orgs/:orgId/treasury/sign-requests', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin', 'manager'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN' });
+    }
+    const signRequests = await db.listTreasurySignRequests({
+      orgId,
+      status: req.query.status as string | undefined,
+      limit: Number(req.query.limit) || 100,
+    });
+    res.json({ success: true, signRequests });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/orgs/:orgId/treasury/reconcile', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Only owner/admin can run reconciliation' });
+    }
+    const recent = await db.listTreasurySignRequests({ orgId, limit: 200 });
+    const stats = recent.reduce(
+      (acc: any, r: any) => {
+        acc.total += 1;
+        acc[r.status] = (acc[r.status] || 0) + 1;
+        return acc;
+      },
+      { total: 0 }
+    );
+    res.json({
+      success: true,
+      reconciliation: {
+        orgId,
+        scanned: stats.total,
+        statusCounts: stats,
+        note: 'Scaffold reconciliation complete; hook on-chain tx verification in next phase.',
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Policy Management Endpoints
 app.get('/api/policies', authenticate, async (req, res) => {

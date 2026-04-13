@@ -1,0 +1,102 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agentic Commerce Chat UI</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; }
+    .wrap { max-width: 900px; margin: 0 auto; padding: 16px; }
+    .bar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
+    input, button, textarea { border-radius: 8px; border: 1px solid #334155; background: #111827; color: #e5e7eb; }
+    input { padding: 10px; flex: 1; }
+    #messages { height: 70vh; overflow: auto; border: 1px solid #334155; border-radius: 12px; padding: 12px; background: #020617; }
+    .msg { margin: 8px 0; padding: 10px; border-radius: 10px; white-space: pre-wrap; }
+    .u { background: #1e293b; }
+    .a { background: #0b3b2f; }
+    .err { background: #4c0519; }
+    .composer { display: flex; gap: 8px; margin-top: 12px; }
+    textarea { flex: 1; min-height: 60px; padding: 10px; resize: vertical; }
+    button { padding: 10px 14px; cursor: pointer; }
+    .hint { font-size: 12px; opacity: 0.8; margin-left: 8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="bar">
+      <input id="email" placeholder="your email (for user context)" />
+      <button id="saveEmail">Save</button>
+      <button id="clear">Clear Chat</button>
+      <span class="hint" id="apiInfo"></span>
+    </div>
+    <div id="messages"></div>
+    <div class="composer">
+      <textarea id="input" placeholder="Ask to find/buy something..."></textarea>
+      <button id="send">Send</button>
+    </div>
+  </div>
+  <script>
+    const API_BASE_URL = "__API_BASE_URL__";
+    document.getElementById('apiInfo').textContent = `API: ${API_BASE_URL}`;
+
+    const emailInput = document.getElementById('email');
+    const input = document.getElementById('input');
+    const messagesEl = document.getElementById('messages');
+    const history = [];
+    emailInput.value = localStorage.getItem('chat_email') || '';
+
+    function add(role, text, cls) {
+      const d = document.createElement('div');
+      d.className = 'msg ' + (cls || (role === 'user' ? 'u' : 'a'));
+      d.textContent = text;
+      messagesEl.appendChild(d);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    document.getElementById('saveEmail').onclick = () => {
+      localStorage.setItem('chat_email', emailInput.value.trim());
+      add('assistant', 'Email saved for this browser.');
+    };
+
+    document.getElementById('clear').onclick = () => {
+      history.length = 0;
+      messagesEl.innerHTML = '';
+    };
+
+    async function send() {
+      const message = input.value.trim();
+      if (!message) return;
+      const user_email = (emailInput.value || '').trim();
+      if (!user_email) {
+        add('assistant', 'Please enter an email first.', 'err');
+        return;
+      }
+      add('user', message, 'u');
+      history.push({ role: 'user', content: message });
+      input.value = '';
+
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/chat/send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message, user_email, history })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Chat request failed');
+        add('assistant', data.reply || '(no response)', 'a');
+        history.push({ role: 'assistant', content: data.reply || '' });
+      } catch (e) {
+        add('assistant', String(e.message || e), 'err');
+      }
+    }
+
+    document.getElementById('send').onclick = send;
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        send();
+      }
+    });
+  </script>
+</body>
+</html>

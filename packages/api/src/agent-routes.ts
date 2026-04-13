@@ -4,6 +4,7 @@
  */
 
 import { Router } from 'express';
+import { createHmac } from 'crypto';
 import { PublicKey } from '@solana/web3.js';
 import { getAssociatedTokenAddressSync } from '@solana/spl-token';
 import { DB } from '@agentic-commerce/database';
@@ -17,6 +18,50 @@ import {
   validatePaymentProof
 } from '@agentic-commerce/integrations';
 import type { X402PaymentProof } from '@agentic-commerce/shared';
+import { PricingService } from './pricing-service';
+import { executeProviderTool, normalizeProviderConfig } from './archtools-adapter';
+import { hydrateProviderSecret } from './provider-security';
+
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_PER_WINDOW = 30;
+const requestCounter = new Map<string, { count: number; windowStart: number }>();
+
+function isRateLimited(subject: string): boolean {
+  const now = Date.now();
+  const current = requestCounter.get(subject);
+  if (!current || now - current.windowStart > RATE_LIMIT_WINDOW_MS) {
+    requestCounter.set(subject, { count: 1, windowStart: now });
+    return false;
+  }
+  current.count += 1;
+  requestCounter.set(subject, current);
+  return current.count > RATE_LIMIT_MAX_PER_WINDOW;
+}
+
+function signResultEnvelope(payload: any) {
+  const secret = process.env.AGENT_RESULT_SIGNING_SECRET;
+  if (!secret) {
+    return { signed: false as const, payload };
+  }
+  const serialized = JSON.stringify(payload);
+  const signature = createHmac('sha256', secret).update(serialized).digest('hex');
+  return {
+    signed: true as const,
+    payload,
+    signature,
+    algorithm: 'hmac-sha256',
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function parseQuoteFromHeader(value: string | undefined): any | null {
+  if (!value) return null;
+  try {
+    return b64urlDecodeJson(value);
+  } catch {
+    return null;
+  }
+}
 
 export function createAgentRoutes(
   db: DB,
@@ -24,6 +69,7 @@ export function createAgentRoutes(
   facilitatorService: FacilitatorService
 ) {
   const router = Router();
+  const pricingService = new PricingService();
 
   /**
    * Agent-to-Agent Service Endpoint (with 402 payment handshake)
@@ -40,29 +86,40 @@ export function createAgentRoutes(
       if (!tokenUser) {
         return res.status(401).json({ error: 'Authentication required' });
       }
+      if (isRateLimited(tokenUser)) {
+        return res.status(429).json({
+          error: 'RATE_LIMITED',
+          message: 'Too many service requests. Please retry shortly.',
+        });
+      }
 
       // Get seller agent configuration
       const sellerAgentId = process.env.AGENT_ID || 'seller-agent-default';
-      const sellerMainWallet = process.env.USDC_TOKEN_ACCOUNT; // Main SOL wallet address
+      const targetAgentId = (req.headers['x-agent-id'] as string | undefined) || sellerAgentId;
+      const targetRegisteredAgent = await db.getRegisteredAgent(targetAgentId);
       const isMainnet = process.env.SOLANA_CLUSTER === 'mainnet-beta';
       const usdcMint = process.env.USDC_MINT
         || (isMainnet ? (process.env.USDC_MINT_MAINNET || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v') : (process.env.USDC_MINT_DEVNET || 'Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr'));
       const network = isMainnet ? 'solana:mainnet' : 'solana:devnet';
       const facilitatorUrl = process.env.FACILITATOR_URL || `${process.env.API_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:3000'}/api/facilitator/verify`;
 
-      if (!sellerMainWallet) {
+      const sellerMainWallet = targetRegisteredAgent?.solanaPubkey || process.env.USDC_TOKEN_ACCOUNT; // Main SOL wallet
+      const sellerTokenAccountFromRegistry = targetRegisteredAgent?.usdcTokenAccount; // Optional explicit ATA
+
+      if (!sellerMainWallet && !sellerTokenAccountFromRegistry) {
         return res.status(500).json({ 
           error: 'AGENT_NOT_CONFIGURED',
-          message: 'Seller wallet not configured. Set USDC_TOKEN_ACCOUNT env var to your main SOL wallet address.'
+          message: 'Seller wallet not configured. Set agent.solanaPubkey/usdcTokenAccount in registry or USDC_TOKEN_ACCOUNT env var.'
         });
       }
 
-      // Derive the seller's USDC ATA from their main wallet
-      const sellerWalletPubkey = new PublicKey(sellerMainWallet);
-      const usdcTokenAccount = getAssociatedTokenAddressSync(
-        new PublicKey(usdcMint),
-        sellerWalletPubkey
-      ).toBase58();
+      // Prefer explicit seller USDC token account from registry, otherwise derive from seller main wallet.
+      const usdcTokenAccount = sellerTokenAccountFromRegistry
+        ? sellerTokenAccountFromRegistry
+        : getAssociatedTokenAddressSync(
+            new PublicKey(usdcMint),
+            new PublicKey(sellerMainWallet as string)
+          ).toBase58();
 
       // Check if payment signature provided
       const paymentSigHeader = req.headers['payment-signature'] as string | undefined;
@@ -70,11 +127,11 @@ export function createAgentRoutes(
       if (!paymentSigHeader) {
         // No payment yet - return 402 Payment Required
         // Skip policy check - buyer agent handles all policy enforcement
-        const price = calculateServicePrice(serviceType, body);
+        const quote = await pricingService.quoteForAgent(db, targetAgentId, serviceType);
 
         // Return 402 Payment Required
         const requirement = createX402Requirement({
-          amount: price.toString(),
+          amount: quote.amountAtomic.toString(),
           payTo: usdcTokenAccount,
           mint: usdcMint,
           network,
@@ -87,8 +144,10 @@ export function createAgentRoutes(
 
         res.status(402);
         res.header('PAYMENT-REQUIRED', b64urlEncodeJson(requirement));
+        res.header('X-SERVICE-QUOTE', b64urlEncodeJson(quote));
         return res.json({ 
           error: 'PAYMENT_REQUIRED',
+          quote,
           requirement,
         });
       }
@@ -117,9 +176,25 @@ export function createAgentRoutes(
       // This prevents double-rejection when seller agent ID differs from buyer's request
       console.log('⏭️  Skipping seller policy check (buyer already verified)');
 
-      // Calculate price for verification
-      const price = calculateServicePrice(serviceType, body);
-      console.log(`💵 Calculated price: ${price} lamports (${price/1_000_000} USDC)`);
+      // Calculate price for verification. Prefer buyer-provided quote header when valid.
+      const quoteFromHeader = parseQuoteFromHeader(req.headers['x-service-quote'] as string | undefined);
+      const quote =
+        quoteFromHeader &&
+        quoteFromHeader.agentId === targetAgentId &&
+        quoteFromHeader.serviceType === serviceType &&
+        new Date(quoteFromHeader.expiresAt).getTime() > Date.now()
+          ? quoteFromHeader
+          : await pricingService.quoteForAgent(db, targetAgentId, serviceType);
+      console.log(`💵 Calculated price: ${quote.amountAtomic} atomic (${quote.amountUsd} USDC)`);
+
+      // Replay protection (phase 3): reject any previously used nonce.
+      const nonceSeen = await db.checkX402Nonce(proof.nonce);
+      if (nonceSeen) {
+        return res.status(409).json({
+          error: 'NONCE_ALREADY_USED',
+          message: 'This x402 proof nonce has already been consumed.',
+        });
+      }
 
       // Verify payment via facilitator
       console.log(`🔍 Verifying payment proof with facilitator...`);
@@ -130,7 +205,7 @@ export function createAgentRoutes(
           payTo: usdcTokenAccount,
           network,
           bodyHash,
-          minAmount: price.toString(),
+          minAmount: quote.amountAtomic.toString(),
         },
       });
 
@@ -143,13 +218,27 @@ export function createAgentRoutes(
       }
 
       console.log(`✅ Payment verified successfully!`);
+
+      // Persist verified nonce/receipt marker for replay prevention.
+      await db.storeX402Nonce({
+        nonce: proof.nonce,
+        txSignature: proof.txSignature,
+        agentId: targetAgentId,
+        buyerUserId: tokenUser,
+        amount: proof.amount,
+        mint: proof.mint,
+        verified: true,
+        verifiedAt: new Date(),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      });
+
       // Payment verified! Record the transaction
       await db.recordPurchaseAttempt({
         userId: tokenUser,
         productId: `agent-service-${serviceType}`,
         productName: `Agent Service: ${serviceType}`,
-        amount: price / 1_000_000,
-        merchant: sellerAgentId,
+        amount: quote.amountUsd,
+        merchant: targetAgentId,
         category: serviceType,
         allowed: true,
         requiresApproval: false,
@@ -160,7 +249,7 @@ export function createAgentRoutes(
         solanaMint: proof.mint,
         x402Nonce: proof.nonce,
         facilitatorReceipt: verification.receipt,
-        recipientAgentId: sellerAgentId,
+        recipientAgentId: targetAgentId,
         buyerAgentId: req.headers['user-agent'] || 'unknown',
         agentServiceType: serviceType,
       });
@@ -169,8 +258,20 @@ export function createAgentRoutes(
       res.header('PAYMENT-RESPONSE', b64urlEncodeJson(verification.receipt));
 
       // Execute the service and return response
-      const serviceResult = await executeAgentService(serviceType, body);
-      return res.json(serviceResult);
+      const serviceResult = await executeAgentService(db, targetAgentId, serviceType, body);
+      const envelope = signResultEnvelope({
+        targetAgentId,
+        quote,
+        serviceType,
+        bodyHash,
+        paymentReceipt: verification.receipt,
+        serviceResult,
+      });
+      res.header('X-RESULT-ENVELOPE', b64urlEncodeJson(envelope));
+      return res.json({
+        ...serviceResult,
+        resultEnvelope: envelope,
+      });
 
     } catch (error: any) {
       console.error('Agent service error:', error);
@@ -185,29 +286,37 @@ export function createAgentRoutes(
 }
 
 /**
- * Calculate price for service (in USDC lamports, 6 decimals)
- */
-function calculateServicePrice(serviceType: string, _params: any): number {
-  const basePrices: Record<string, number> = {
-    'scrape': 100_000, // 0.1 USDC
-    'data-scraping': 100_000, // 0.1 USDC (alias for ChatGPT flow)
-    'api-call': 100_000, // 0.1 USDC
-    'api-calling': 100_000, // 0.1 USDC
-    'computation': 100_000, // 0.1 USDC
-    'data-analysis': 200_000, // 0.2 USDC
-    'advanced-analysis': 3_000_000, // 3.0 USDC - for testing approval thresholds
-    'ml-inference': 2_500_000, // 2.5 USDC - for testing $2+ approval
-    'data-pipeline': 5_000_000, // 5.0 USDC - for testing high-value services
-    'default': 100_000,
-  };
-  return basePrices[serviceType] ?? basePrices.default;
-}
-
-/**
  * Execute the agent service. Currently returns in-platform mock data.
  * In production: proxy to the seller agent's baseUrl (e.g. POST baseUrl + /services/:type).
  */
-async function executeAgentService(serviceType: string, params: any): Promise<any> {
+async function executeAgentService(db: DB, agentId: string, serviceType: string, params: any): Promise<any> {
+  // Prefer provider-driven execution when an agent defines provider metadata.
+  const registered = await db.getRegisteredAgent(agentId);
+  const providerRaw = hydrateProviderSecret(registered?.metadata?.provider);
+  const provider = normalizeProviderConfig({
+    ...providerRaw,
+    apiKey: providerRaw?.apiKey || process.env.ARCH_TOOLS_API_KEY,
+    baseUrl: providerRaw?.baseUrl || process.env.ARCH_TOOLS_BASE_URL || providerRaw?.endpoint,
+  });
+  if (provider) {
+    const live = await executeProviderTool(serviceType, params, provider);
+    if (live.ok) {
+      return {
+        ok: true,
+        service: serviceType,
+        provider: provider.name,
+        data: live.data,
+      };
+    }
+    return {
+      ok: false,
+      service: serviceType,
+      provider: provider.name,
+      error: live.error,
+      status: live.status,
+    };
+  }
+
   // Normalize service types
   let normalizedType = serviceType;
   if (serviceType === 'data-scraping') normalizedType = 'scrape';

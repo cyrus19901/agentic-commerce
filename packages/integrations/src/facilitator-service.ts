@@ -4,6 +4,7 @@
  */
 
 import { Connection, PublicKey, ParsedTransactionWithMeta } from '@solana/web3.js';
+import { createHmac } from 'crypto';
 import type { X402PaymentProof, X402Receipt } from '@agentic-commerce/shared';
 import { DB } from '@agentic-commerce/database';
 import { sha256HexUtf8, parseNetworkId, getRpcUrl } from './x402-protocol';
@@ -34,6 +35,47 @@ export class FacilitatorService {
 
   constructor(db: DB) {
     this.db = db;
+  }
+
+  private getReceiptSigningConfig(): { kid: string; secret: string } | null {
+    const keysJson = process.env.FACILITATOR_RECEIPT_KEYS;
+    const activeKid = process.env.FACILITATOR_ACTIVE_KID || 'v1';
+    if (keysJson) {
+      try {
+        const parsed = JSON.parse(keysJson) as Record<string, string>;
+        const secret = parsed[activeKid];
+        if (secret) return { kid: activeKid, secret };
+      } catch {
+        // fall through to single-key mode
+      }
+    }
+    const fallback = process.env.FACILITATOR_RECEIPT_SECRET;
+    if (fallback) return { kid: activeKid, secret: fallback };
+    return null;
+  }
+
+  private signReceipt(receipt: X402Receipt): X402Receipt {
+    const config = this.getReceiptSigningConfig();
+    if (!config) return receipt;
+    const canonical = {
+      ok: receipt.ok,
+      txSignature: receipt.txSignature,
+      amount: receipt.amount,
+      mint: receipt.mint,
+      payTo: receipt.payTo,
+      nonce: receipt.nonce,
+      verifiedAt: receipt.verifiedAt,
+      buyer: receipt.buyer || '',
+    };
+    const receiptHash = sha256HexUtf8(JSON.stringify(canonical));
+    const facilitatorSig = createHmac('sha256', config.secret).update(receiptHash).digest('hex');
+    return {
+      ...receipt,
+      signerKid: config.kid,
+      signerAlg: 'hmac-sha256',
+      receiptHash,
+      facilitatorSig,
+    };
   }
 
   /**
@@ -201,10 +243,11 @@ export class FacilitatorService {
       verifiedAt: now,
       buyer: transferInfo.buyer,
     };
+    const signedReceipt = this.signReceipt(receipt);
 
     return {
       ok: true,
-      receipt,
+      receipt: signedReceipt,
     };
   }
 

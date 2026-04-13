@@ -162,4 +162,8 @@ export interface X402Receipt {
   nonce: string;
   verifiedAt: number;
   buyer?: string;
+  signerKid?: string;
+  signerAlg?: string;
+  receiptHash?: string;
+  facilitatorSig?: string;
 }
