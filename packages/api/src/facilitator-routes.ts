@@ -73,10 +73,29 @@ export function createFacilitatorRoutes(facilitatorService: FacilitatorService) 
    * Health check for facilitator service
    */
   router.get('/health', (req, res) => {
+    const hasKeySet = !!(process.env.FACILITATOR_RECEIPT_KEYS || process.env.FACILITATOR_RECEIPT_SECRET);
     res.json({
       ok: true,
       service: 'facilitator',
+      receiptsSigned: hasKeySet,
       timestamp: new Date().toISOString(),
+    });
+  });
+
+  /**
+   * GET /api/facilitator/meta
+   * Public facilitator metadata for receipt verification wiring.
+   */
+  router.get('/meta', (_req, res) => {
+    const activeKid = process.env.FACILITATOR_ACTIVE_KID || 'v1';
+    const hasKeySet = !!(process.env.FACILITATOR_RECEIPT_KEYS || process.env.FACILITATOR_RECEIPT_SECRET);
+    res.json({
+      ok: true,
+      signerAlg: hasKeySet ? 'hmac-sha256' : null,
+      signerKid: hasKeySet ? activeKid : null,
+      note: hasKeySet
+        ? 'Receipts include facilitatorSig/receiptHash. Verifiers must share the matching secret by signerKid.'
+        : 'Receipt signing is disabled.',
     });
   });
 

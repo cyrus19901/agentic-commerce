@@ -18,6 +18,10 @@ import {
 import { DB } from '@agentic-commerce/database';
 import { PolicyService } from '@agentic-commerce/core';
 import { createHash } from 'crypto';
+import { PricingService } from './pricing-service';
+import { fetchProviderX402Requirement, normalizeProviderConfig } from './archtools-adapter';
+import { hydrateProviderSecret } from './provider-security';
+import { getTreasuryCustodyProvider } from './treasury-custody';
 
 // Single source of truth: USDC mints (must match E2E test and docker-compose USDC_MINT_DEVNET)
 const USDC_MINT_DEVNET = process.env.USDC_MINT_DEVNET || 'Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr';
@@ -47,12 +51,183 @@ interface FacilitatorService {
   verifyPayment(proof: any, expected: any): Promise<{ ok: boolean; error?: string }>;
 }
 
+function b64urlEncodeJson(input: any): string {
+  return Buffer.from(JSON.stringify(input))
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+}
+
+function loadTreasuryKeypair(): Keypair | null {
+  const rawJson = process.env.TREASURY_SECRET_KEY_JSON;
+  if (rawJson) {
+    try {
+      const arr = JSON.parse(rawJson);
+      if (Array.isArray(arr)) {
+        return Keypair.fromSecretKey(Uint8Array.from(arr));
+      }
+    } catch {
+      // continue to other formats
+    }
+  }
+  const rawB64 = process.env.TREASURY_SECRET_KEY_BASE64;
+  if (rawB64) {
+    try {
+      const buf = Buffer.from(rawB64, 'base64');
+      return Keypair.fromSecretKey(Uint8Array.from(buf));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function resolveProviderExecuteUrl(provider: any, tool: string): string {
+  const baseUrl = String(provider.baseUrl || '').replace(/\/$/, '');
+  const tmpl = provider.executePathTemplate || '/v1/tools/{tool}';
+  return `${baseUrl}${tmpl.replace('{tool}', encodeURIComponent(tool))}`;
+}
+
+function selectProviderAcceptLeg(requirement: any, preferred = (process.env.PREFERRED_PROVIDER_NETWORK || 'solana')): any | null {
+  const accepts = Array.isArray(requirement?.accepts) ? requirement.accepts : [];
+  if (!accepts.length) return null;
+  const pref = preferred.toLowerCase();
+  const best =
+    accepts.find((a: any) => String(a?.network || '').toLowerCase().includes(pref)) ||
+    accepts[0];
+  return best || null;
+}
+
+function buildPaymentToSign(selectedAccept: any, resourceUrl?: string) {
+  if (!selectedAccept) return null;
+  return {
+    scheme: selectedAccept.scheme,
+    network: selectedAccept.network,
+    asset: selectedAccept.asset,
+    payTo: selectedAccept.payTo,
+    amount: selectedAccept.amount,
+    maxAmountRequired: selectedAccept.maxAmountRequired,
+    maxTimeoutSeconds: selectedAccept.maxTimeoutSeconds,
+    resource: selectedAccept.resource || resourceUrl,
+    description: selectedAccept.description,
+    mimeType: selectedAccept.mimeType,
+    extra: selectedAccept.extra || {},
+  };
+}
+
+async function resolveTreasurySigner(
+  db: DB,
+  userId: string,
+  paymentToSign: any
+): Promise<{ keypair: Keypair; walletRecord?: any; orgId?: string }> {
+  const fundingAccount = await db.getFundingAccountByUserId(userId);
+  const orgId = fundingAccount?.organizationId || undefined;
+  if (orgId) {
+    const selectedWallet = await db.selectOrgTreasuryWalletForPayment({
+      orgId,
+      network: String(paymentToSign.network),
+      asset: String(paymentToSign.asset),
+      amountAtomic: String(paymentToSign.amount),
+    });
+    if (selectedWallet) {
+      if (!selectedWallet.keyCiphertext) {
+        throw new Error('Selected org treasury wallet has no signer material configured');
+      }
+      const custody = getTreasuryCustodyProvider();
+      const signer = custody.loadSignerFromCiphertext(selectedWallet.address, selectedWallet.keyCiphertext);
+      return { keypair: Keypair.fromSecretKey(signer.secretKey), walletRecord: selectedWallet, orgId };
+    }
+  }
+  const fallback = loadTreasuryKeypair();
+  if (!fallback) throw new Error('TREASURY_NOT_CONFIGURED');
+  return { keypair: fallback, walletRecord: null, orgId };
+}
+
 export function createChatGPTAgentRoutes(
   db: DB,
   policyService: PolicyService,
   facilitatorService: FacilitatorService
 ) {
   const router = Router();
+  const pricingService = new PricingService();
+
+  /**
+   * POST /api/chatgpt-agent/service-options
+   * Lists available services + live quote previews for chat UX before payment.
+   */
+  router.post('/service-options', async (req, res) => {
+    try {
+      const userEmail = req.body?.user_email || (req as any).user?.email;
+      const agentId = req.body.agentId || req.body.agent_id;
+      const requested = req.body.serviceTypes || req.body.service_types;
+      if (!userEmail || !agentId) {
+        return res.status(400).json({
+          error: 'INVALID_REQUEST',
+          message: 'user_email and agent_id are required',
+        });
+      }
+      const user = await db.getUserByEmail(userEmail);
+      if (!user) return res.status(404).json({ error: 'USER_NOT_FOUND' });
+      const agent = await db.getRegisteredAgent(agentId);
+      if (!agent) return res.status(404).json({ error: 'AGENT_NOT_FOUND' });
+
+      let services: string[] = [];
+      if (Array.isArray(requested) && requested.length) {
+        services = requested.map((s: any) => String(s)).filter(Boolean);
+      } else if (Array.isArray(agent.services) && agent.services.length) {
+        services = agent.services.map((s: any) => String(s)).filter(Boolean);
+      } else {
+        services = ['scrape'];
+      }
+      services = Array.from(new Set(services)).slice(0, 50);
+
+      const quotes = await Promise.all(
+        services.map(async (serviceType) => {
+          try {
+            const q = await pricingService.quoteForAgent(db, agentId, serviceType);
+            return {
+              serviceType,
+              available: true,
+              quote: {
+                quoteId: q.quoteId,
+                amountUsd: q.amountUsd,
+                amountAtomic: q.amountAtomic,
+                currency: q.currency,
+                expiresAt: q.expiresAt,
+                source: q.source,
+                toolRef: q.toolRef,
+              },
+            };
+          } catch (error: any) {
+            return {
+              serviceType,
+              available: false,
+              error: error?.message || 'quote_failed',
+            };
+          }
+        })
+      );
+
+      return res.json({
+        success: true,
+        mode: process.env.PROVIDER_NATIVE_X402 === 'true' ? 'provider-native-x402' : 'platform-hop-x402',
+        requiresConfirmation: process.env.REQUIRE_PAYMENT_CONFIRMATION !== 'false',
+        payer: process.env.USE_TREASURY_PAYER === 'true' ? 'treasury' : 'user-wallet',
+        agent: {
+          agentId,
+          name: agent.name,
+          baseUrl: agent.baseUrl,
+        },
+        options: quotes,
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        error: 'SERVICE_OPTIONS_ERROR',
+        message: error.message,
+      });
+    }
+  });
 
   /**
    * POST /api/chatgpt-agent/wallet
@@ -217,6 +392,13 @@ export function createChatGPTAgentRoutes(
    * Request a service from another agent (handles payment automatically)
    */
   router.post('/request-service', async (req, res) => {
+    let idemContext:
+      | {
+          userId: string;
+          endpoint: string;
+          idempotencyKey: string;
+        }
+      | undefined;
     try {
       const userEmail = req.body?.user_email || (req as any).user?.email;
       
@@ -224,6 +406,7 @@ export function createChatGPTAgentRoutes(
       const agentId = req.body.agentId || req.body.agent_id;
       const serviceType = req.body.serviceType || req.body.service_type;
       const serviceParams = req.body.serviceParams || req.body.service_params;
+      const idempotencyKey = (req.headers['x-idempotency-key'] as string) || req.body.idempotency_key;
 
       if (!userEmail) {
         return res.status(400).json({ 
@@ -245,6 +428,54 @@ export function createChatGPTAgentRoutes(
           error: 'USER_NOT_FOUND',
           message: 'Please create an account first' 
         });
+      }
+      if (idempotencyKey && String(idempotencyKey).trim().length > 0) {
+        const endpoint = '/api/chatgpt-agent/request-service';
+        const requestHash = createHash('sha256')
+          .update(
+            JSON.stringify({
+              agentId,
+              serviceType,
+              serviceParams: serviceParams || {},
+            })
+          )
+          .digest('hex');
+        const existing = await db.getIdempotentRequest({
+          userId: user.id,
+          endpoint,
+          idempotencyKey: String(idempotencyKey),
+        });
+        if (existing) {
+          if (existing.requestHash !== requestHash) {
+            return res.status(409).json({
+              error: 'IDEMPOTENCY_CONFLICT',
+              message: 'Idempotency key already used with a different request payload',
+            });
+          }
+          if (existing.status === 'completed' && existing.responseJson) {
+            return res.status(existing.responseCode || 200).json({
+              ...existing.responseJson,
+              idempotencyReplay: true,
+            });
+          }
+          if (existing.status === 'pending') {
+            return res.status(409).json({
+              error: 'REQUEST_IN_PROGRESS',
+              message: 'A request with this idempotency key is already in progress',
+            });
+          }
+          return res.status(409).json({
+            error: 'REQUEST_ALREADY_FAILED',
+            message: existing.errorMessage || 'Previous request with this idempotency key failed',
+          });
+        }
+        await db.createPendingIdempotentRequest({
+          userId: user.id,
+          endpoint,
+          idempotencyKey: String(idempotencyKey),
+          requestHash,
+        });
+        idemContext = { userId: user.id, endpoint, idempotencyKey: String(idempotencyKey) };
       }
 
       // Log the ChatGPT query (fire-and-forget)
@@ -282,8 +513,14 @@ export function createChatGPTAgentRoutes(
         });
       }
 
-      // Calculate price (0.1 USDC default, could come from agent pricing in future)
-      const priceUsd = 0.1; // USDC amount
+      // Fetch agent-native quote (production path: provider quote, fallback: local map).
+      const quote = await pricingService.quoteForAgent(db, agentId, serviceType);
+      const priceUsd = quote.amountUsd;
+      const useFundingLedger = process.env.USE_FUNDING_LEDGER === 'true';
+      const useTreasuryPayer = process.env.USE_TREASURY_PAYER === 'true';
+      const useProviderNativeX402 = process.env.PROVIDER_NATIVE_X402 === 'true';
+      const fundingRef = `svc_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      let reservationEntryId: string | undefined;
 
       // Get wallet balance
       const balanceCheckNetwork = solanaCluster();
@@ -316,6 +553,21 @@ export function createChatGPTAgentRoutes(
       const purpose = serviceParams?.url || serviceParams?.endpoint || serviceParams?.target || 
                      serviceParams?.description || JSON.stringify(serviceParams || {});
       
+      // If user is spending from an org-allocated subaccount, ensure org membership is active.
+      if (useFundingLedger) {
+        const fundingAccount = await db.getFundingAccountByUserId(user.id);
+        if (fundingAccount?.organizationId) {
+          const membership = await db.getOrganizationMembership(fundingAccount.organizationId, user.id);
+          if (!membership || membership.status !== 'active') {
+            return res.status(403).json({
+              error: 'ORG_MEMBERSHIP_REQUIRED',
+              message: 'User must be an active organization member to spend org-allocated funds',
+              organizationId: fundingAccount.organizationId,
+            });
+          }
+        }
+      }
+
       const policyCheck = await policyService.checkPurchase({
         userId: user.id,
         productId: `service-${serviceType}`,
@@ -346,31 +598,438 @@ export function createChatGPTAgentRoutes(
           message: 'This service request requires manager approval',
           reason: policyCheck.reason,
           estimatedCost: priceUsd,
+          quoteId: quote.quoteId,
+          quoteExpiresAt: quote.expiresAt,
           serviceType,
           agentId,
           matchedPolicies: policyCheck.matchedPolicies,
         });
       }
 
-      // Check if user has sufficient balance
-      if (usdcBalance < priceUsd) {
+      if (useProviderNativeX402) {
+        const providerRaw = hydrateProviderSecret(sellerAgent?.metadata?.provider);
+        const provider = normalizeProviderConfig({
+          ...providerRaw,
+          apiKey: providerRaw?.apiKey || process.env.ARCH_TOOLS_API_KEY,
+          baseUrl: providerRaw?.baseUrl || process.env.ARCH_TOOLS_BASE_URL || providerRaw?.endpoint,
+        });
+        if (!provider || provider.pricingStrategy !== 'x402') {
+          return res.status(400).json({
+            error: 'PROVIDER_NATIVE_X402_UNAVAILABLE',
+            message: 'Provider-native x402 requires provider pricingStrategy=x402 and provider metadata',
+          });
+        }
+        const providerChallenge = await fetchProviderX402Requirement(serviceType, serviceParams || {}, provider);
+        const selectedAccept = selectProviderAcceptLeg(providerChallenge.requirement);
+        const paymentToSign = buildPaymentToSign(selectedAccept, providerChallenge.requirement?.resource?.url);
+        if (!paymentToSign) {
+          return res.status(400).json({
+            error: 'PROVIDER_REQUIREMENT_INVALID',
+            message: 'Provider requirement did not include an acceptable payment leg',
+          });
+        }
+        const confirmPayment = req.body?.confirm_payment === true;
+        const requireConfirmation = process.env.REQUIRE_PAYMENT_CONFIRMATION !== 'false';
+        let routedWalletPreview: any = null;
+        if (useTreasuryPayer) {
+          const fundingAccount = await db.getFundingAccountByUserId(user.id);
+          if (fundingAccount?.organizationId) {
+            routedWalletPreview = await db.selectOrgTreasuryWalletForPayment({
+              orgId: fundingAccount.organizationId,
+              network: String(paymentToSign.network),
+              asset: String(paymentToSign.asset),
+              amountAtomic: String(paymentToSign.amount),
+            });
+          }
+        }
+
+        const previewPayload = {
+          mode: 'provider-native-x402',
+          requiresConfirmation: requireConfirmation,
+          provider: {
+            name: provider.name,
+            baseUrl: provider.baseUrl,
+            tool: providerChallenge.tool,
+          },
+          quote,
+          providerRequirement: providerChallenge.requirement,
+          selectedAccept,
+          paymentToSign,
+          providerPaymentRequiredHeader: providerChallenge.paymentRequiredHeader,
+          requirementSource: providerChallenge.source,
+          transactionPreview: {
+            payer: useTreasuryPayer ? 'treasury' : 'user-wallet',
+            treasuryWalletId: routedWalletPreview?.id,
+            treasuryWalletAddress: routedWalletPreview?.address,
+            network: paymentToSign.network,
+            asset: paymentToSign.asset,
+            amountAtomic: paymentToSign.amount,
+            amountUsd: quote.amountUsd,
+            to: paymentToSign.payTo,
+            serviceType,
+            agentId,
+          },
+        };
+
+        if (!useTreasuryPayer) {
+          return res.status(402).json({
+            error: 'PROVIDER_PAYMENT_REQUIRED',
+            message: 'Provider-native x402 challenge returned. Treasury auto-pay is disabled.',
+            ...previewPayload,
+          });
+        }
+
+        if (requireConfirmation && !confirmPayment) {
+          return res.status(200).json({
+            success: false,
+            error: 'CONFIRMATION_REQUIRED',
+            message: 'Set confirm_payment=true to execute treasury payment for this provider-native transaction.',
+            ...previewPayload,
+          });
+        }
+
+        let treasurySelection: { keypair: Keypair; walletRecord?: any; orgId?: string };
+        try {
+          treasurySelection = await resolveTreasurySigner(db, user.id, paymentToSign);
+        } catch (e: any) {
+          if (reservationEntryId) {
+            await db.releaseFundingReservation({ reservationEntryId, reason: 'treasury-signer-resolution-failed' });
+          }
+          return res.status(500).json({
+            error: 'TREASURY_NOT_CONFIGURED',
+            message: e?.message || 'Treasury signer could not be resolved',
+          });
+        }
+        const treasuryKeypair = treasurySelection.keypair;
+        const requestHash = createHash('sha256')
+          .update(JSON.stringify({ agentId, serviceType, serviceParams: serviceParams || {}, paymentToSign }))
+          .digest('hex');
+        const signRequestId = treasurySelection.orgId
+          ? await db.createTreasurySignRequest({
+              orgId: treasurySelection.orgId,
+              walletId: treasurySelection.walletRecord?.id,
+              userId: user.id,
+              endpoint: '/api/chatgpt-agent/request-service',
+              requestHash,
+              idempotencyKey: idemContext?.idempotencyKey,
+              network: String(paymentToSign.network),
+              asset: String(paymentToSign.asset),
+              destination: String(paymentToSign.payTo),
+              amountAtomic: String(paymentToSign.amount),
+              amountUsd: quote.amountUsd,
+              metadata: { provider: provider.name, tool: providerChallenge.tool, mode: 'provider-native-x402' },
+            })
+          : undefined;
+
+        // Reserve user subaccount funds (authorization/accounting) before treasury payment.
+        if (useFundingLedger) {
+          const reserved = await db.reserveFundingAmount({
+            userId: user.id,
+            amount: quote.amountUsd,
+            currency: 'USDC',
+            referenceType: 'provider-native-agent-service',
+            referenceId: fundingRef,
+            metadata: { agentId, serviceType, quoteId: quote.quoteId, provider: provider.name },
+          });
+          if (!reserved.reserved) {
+            return res.status(402).json({
+              error: 'INSUFFICIENT_FUNDING_BALANCE',
+              message: reserved.reason || 'Insufficient funding balance',
+              funding: {
+                accountId: reserved.accountId,
+                balanceAvailable: reserved.balanceAvailable,
+                balanceReserved: reserved.balanceReserved,
+                requiredAmount: quote.amountUsd,
+                currency: 'USDC',
+              },
+            });
+          }
+          reservationEntryId = reserved.reservationEntryId;
+        }
+
+        const providerNetwork = String(paymentToSign.network || '').toLowerCase();
+        if (!providerNetwork.startsWith('solana')) {
+          if (reservationEntryId) {
+            await db.releaseFundingReservation({ reservationEntryId, reason: 'unsupported-provider-network' });
+          }
+          return res.status(400).json({
+            error: 'UNSUPPORTED_PROVIDER_NETWORK',
+            message: `Treasury auto-pay currently supports solana legs only. Got: ${paymentToSign.network}`,
+          });
+        }
+
+        const rpcUrl = providerNetwork.includes('devnet')
+          ? (process.env.SOLANA_RPC_DEVNET || 'https://api.devnet.solana.com')
+          : (process.env.SOLANA_RPC_MAINNET || 'https://api.mainnet-beta.solana.com');
+        const connection = new Connection(rpcUrl, 'confirmed');
+        const mint = new PublicKey(String(paymentToSign.asset));
+        const payTo = new PublicKey(String(paymentToSign.payTo));
+        const payerAta = getAssociatedTokenAddressSync(mint, treasuryKeypair.publicKey);
+
+        let treasuryAtomic = 0n;
+        try {
+          const payerAccount = await getAccount(connection, payerAta);
+          treasuryAtomic = payerAccount.amount;
+        } catch {
+          if (reservationEntryId) {
+            await db.releaseFundingReservation({ reservationEntryId, reason: 'treasury-token-account-missing' });
+          }
+          if (signRequestId) {
+            await db.updateTreasurySignRequest(signRequestId, {
+              status: 'failed',
+              errorMessage: 'TREASURY_TOKEN_ACCOUNT_MISSING',
+            });
+          }
+          return res.status(402).json({
+            error: 'TREASURY_TOKEN_ACCOUNT_MISSING',
+            message: 'Treasury token account for provider asset not found/funded',
+            treasury: { publicKey: treasuryKeypair.publicKey.toBase58(), tokenAccount: payerAta.toBase58(), asset: paymentToSign.asset },
+          });
+        }
+
+        const amountAtomicBig = BigInt(String(paymentToSign.amount));
+        if (treasuryAtomic < amountAtomicBig) {
+          if (reservationEntryId) {
+            await db.releaseFundingReservation({ reservationEntryId, reason: 'treasury-balance-insufficient' });
+          }
+          if (signRequestId) {
+            await db.updateTreasurySignRequest(signRequestId, {
+              status: 'failed',
+              errorMessage: 'TREASURY_INSUFFICIENT_FUNDS',
+            });
+          }
+          return res.status(402).json({
+            error: 'TREASURY_INSUFFICIENT_FUNDS',
+            message: 'Treasury does not have enough balance for provider-native payment',
+            treasury: {
+              publicKey: treasuryKeypair.publicKey.toBase58(),
+              tokenAccount: payerAta.toBase58(),
+              balanceAtomic: treasuryAtomic.toString(),
+              requiredAtomic: amountAtomicBig.toString(),
+              asset: paymentToSign.asset,
+            },
+          });
+        }
+
+        const tx = new Transaction().add(
+          createTransferInstruction(
+            payerAta,
+            payTo,
+            treasuryKeypair.publicKey,
+            Number(amountAtomicBig)
+          )
+        );
+        let txSignature = '';
+        try {
+          txSignature = await sendAndConfirmTransaction(connection, tx, [treasuryKeypair], { commitment: 'confirmed' });
+        } catch (payErr: any) {
+          if (reservationEntryId) {
+            await db.releaseFundingReservation({ reservationEntryId, reason: 'treasury-payment-failed' });
+          }
+          if (signRequestId) {
+            await db.updateTreasurySignRequest(signRequestId, {
+              status: 'failed',
+              errorMessage: payErr?.message || 'payment failed',
+            });
+          }
+          return res.status(500).json({
+            error: 'TREASURY_PAYMENT_FAILED',
+            message: payErr?.message || 'Failed treasury payment for provider-native flow',
+          });
+        }
+        if (signRequestId) {
+          await db.updateTreasurySignRequest(signRequestId, {
+            status: 'signed',
+            txSignature,
+          });
+        }
+
+        const proof = {
+          protocol: 'x402',
+          version: 'v2',
+          txSignature,
+          network: paymentToSign.network,
+          nonce: `nonce_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          amount: String(paymentToSign.amount),
+          mint: paymentToSign.asset,
+          payTo: paymentToSign.payTo,
+          bodyHash: createHash('sha256').update(JSON.stringify(serviceParams || {})).digest('hex'),
+          timestamp: Date.now(),
+        };
+        const providerSubmitUrl = resolveProviderExecuteUrl(provider, providerChallenge.tool);
+        const providerRes = await fetch(providerSubmitUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Payment-Signature': b64urlEncodeJson(proof),
+          },
+          body: JSON.stringify(serviceParams || {}),
+        });
+        const providerText = await providerRes.text();
+        let providerJson: any = {};
+        try {
+          providerJson = providerText ? JSON.parse(providerText) : {};
+        } catch {
+          providerJson = { raw: providerText };
+        }
+
+        if (!providerRes.ok) {
+          if (reservationEntryId) {
+            await db.releaseFundingReservation({ reservationEntryId, reason: 'provider-rejected-after-payment' });
+          }
+          if (signRequestId) {
+            await db.updateTreasurySignRequest(signRequestId, {
+              status: 'failed',
+              providerStatus: providerRes.status,
+              errorMessage: 'provider rejected execution',
+              metadata: providerJson,
+            });
+          }
+          return res.status(providerRes.status).json({
+            error: 'PROVIDER_EXECUTION_FAILED',
+            message: 'Provider rejected post-payment execution',
+            providerStatus: providerRes.status,
+            providerResponse: providerJson,
+            payment: {
+              txSignature,
+              network: paymentToSign.network,
+              asset: paymentToSign.asset,
+              payTo: paymentToSign.payTo,
+              amountAtomic: String(paymentToSign.amount),
+            },
+          });
+        }
+
+        if (reservationEntryId) {
+          await db.commitFundingReservation({
+            reservationEntryId,
+            referenceType: 'provider-native-onchain-payment',
+            referenceId: txSignature,
+          });
+        }
+        if (signRequestId) {
+          await db.updateTreasurySignRequest(signRequestId, {
+            status: 'confirmed',
+            providerStatus: providerRes.status,
+            metadata: providerJson,
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          mode: 'provider-native-x402',
+          confirmed: true,
+          payment: {
+            payer: 'treasury',
+            walletId: treasurySelection.walletRecord?.id,
+            from: treasuryKeypair.publicKey.toBase58(),
+            fromTokenAccount: payerAta.toBase58(),
+            to: paymentToSign.payTo,
+            network: paymentToSign.network,
+            asset: paymentToSign.asset,
+            amountAtomic: String(paymentToSign.amount),
+            amountUsd: quote.amountUsd,
+            txSignature,
+            explorerUrl: providerNetwork.includes('devnet')
+              ? `https://solscan.io/tx/${txSignature}?cluster=devnet`
+              : `https://solscan.io/tx/${txSignature}`,
+          },
+          provider: {
+            name: provider.name,
+            baseUrl: provider.baseUrl,
+            tool: providerChallenge.tool,
+            status: providerRes.status,
+          },
+          providerResponse: providerJson,
+        });
+      }
+
+      // 1.5 OPTIONAL: Funding ledger reserve (gift-card/subaccount style)
+      if (useFundingLedger) {
+        const reserved = await db.reserveFundingAmount({
+          userId: user.id,
+          amount: priceUsd,
+          currency: 'USDC',
+          referenceType: 'agent-service',
+          referenceId: fundingRef,
+          metadata: { agentId, serviceType, quoteId: quote.quoteId },
+        });
+        if (!reserved.reserved) {
+          return res.status(402).json({
+            error: 'INSUFFICIENT_FUNDING_BALANCE',
+            message: reserved.reason || 'Insufficient funding balance',
+            funding: {
+              accountId: reserved.accountId,
+              balanceAvailable: reserved.balanceAvailable,
+              balanceReserved: reserved.balanceReserved,
+              requiredAmount: priceUsd,
+              currency: 'USDC',
+            },
+          });
+        }
+        reservationEntryId = reserved.reservationEntryId;
+      }
+
+      // Check if user has sufficient balance (or treasury balance if enabled)
+      let treasuryTokenAccount: PublicKey | undefined;
+      let treasuryUsdcBalance: number | undefined;
+      if (useTreasuryPayer) {
+        const treasuryKp = loadTreasuryKeypair();
+        if (!treasuryKp) {
+          if (reservationEntryId) {
+            await db.releaseFundingReservation({
+              reservationEntryId,
+              reason: 'treasury-key-missing',
+            });
+          }
+          return res.status(500).json({
+            error: 'TREASURY_NOT_CONFIGURED',
+            message: 'USE_TREASURY_PAYER=true requires TREASURY_SECRET_KEY_JSON or TREASURY_SECRET_KEY_BASE64',
+          });
+        }
+        const { ata } = getUsdcMintAndAta(balanceCheckNetwork, treasuryKp.publicKey);
+        treasuryTokenAccount = await ata;
+        try {
+          const account = await getAccount(balanceConnection, treasuryTokenAccount);
+          treasuryUsdcBalance = Number(account.amount) / 1_000_000;
+        } catch {
+          treasuryUsdcBalance = 0;
+        }
+      }
+
+      const effectiveBalance = useTreasuryPayer ? (treasuryUsdcBalance || 0) : usdcBalance;
+      if (effectiveBalance < priceUsd) {
+        if (reservationEntryId) {
+          await db.releaseFundingReservation({
+            reservationEntryId,
+            reason: useTreasuryPayer ? 'treasury-wallet-insufficient' : 'user-wallet-insufficient',
+          });
+        }
         const clusterParam = balanceCheckNetwork === 'mainnet-beta' ? '' : '?cluster=devnet';
         return res.status(402).json({
           error: 'INSUFFICIENT_FUNDS',
-          message: `Insufficient USDC balance. You need ${priceUsd} USDC but have ${usdcBalance.toFixed(2)} USDC.`,
+          message: `Insufficient USDC balance. You need ${priceUsd} USDC but have ${effectiveBalance.toFixed(2)} USDC.`,
           wallet: {
-            publicKey: walletData.publicKey,
-            tokenAccount: resolvedTokenAccount.toBase58(),
-            currentBalance: usdcBalance,
+            publicKey: useTreasuryPayer ? (loadTreasuryKeypair()?.publicKey.toBase58() || 'unknown') : walletData.publicKey,
+            tokenAccount: useTreasuryPayer ? (treasuryTokenAccount?.toBase58() || 'unknown') : resolvedTokenAccount.toBase58(),
+            currentBalance: effectiveBalance,
             requiredAmount: priceUsd,
             fundingInstructions: {
-              step1: `Fund your SOL wallet with ~0.01 SOL for transaction fees and rent: ${walletData.publicKey}`,
-              step2: `The USDC token account (ATA) will be auto-created on first USDC transfer`,
-              step3: `Then send ${priceUsd} USDC to your wallet (ATA will be derived automatically)`,
-              ataAddress: resolvedTokenAccount.toBase58(),
-              note: 'The ATA (Associated Token Account) is deterministically derived from your wallet address. Most wallets handle this automatically.'
+              step1: useTreasuryPayer
+                ? 'Fund treasury wallet/subaccount balance via admin top-up path'
+                : `Fund your SOL wallet with ~0.01 SOL for transaction fees and rent: ${walletData.publicKey}`,
+              step2: useTreasuryPayer
+                ? 'Increase treasury USDC available balance'
+                : `The USDC token account (ATA) will be auto-created on first USDC transfer`,
+              step3: useTreasuryPayer
+                ? `Then retry service request`
+                : `Then send ${priceUsd} USDC to your wallet (ATA will be derived automatically)`,
+              ataAddress: useTreasuryPayer ? treasuryTokenAccount?.toBase58() : resolvedTokenAccount.toBase58(),
+              note: useTreasuryPayer
+                ? 'Treasury payer mode is enabled; user-level balance checks are enforced by funding ledger.'
+                : 'The ATA (Associated Token Account) is deterministically derived from your wallet address. Most wallets handle this automatically.'
             },
-            solscanUrl: `https://solscan.io/account/${resolvedTokenAccount.toBase58()}${clusterParam}`,
+            solscanUrl: `https://solscan.io/account/${(useTreasuryPayer ? treasuryTokenAccount : resolvedTokenAccount)?.toBase58()}${clusterParam}`,
           },
           service: {
             agent: agentId,
@@ -388,8 +1047,12 @@ export function createChatGPTAgentRoutes(
       const solanaNetwork = solanaCluster();
       const usdcMintForRequirement = solanaNetwork === 'mainnet-beta' ? USDC_MINT_MAINNET : USDC_MINT_DEVNET;
       
-      // Get seller's main wallet address from env (not the ATA - we'll derive it)
-      const sellerMainWallet = process.env.SERVICE_WALLET_PUBKEY || process.env.USDC_TOKEN_ACCOUNT;
+      // Resolve seller wallet from registered agent first, then env fallback.
+      const sellerMainWallet =
+        sellerAgent.solanaPubkey ||
+        sellerAgent.usdcTokenAccount ||
+        process.env.SERVICE_WALLET_PUBKEY ||
+        process.env.USDC_TOKEN_ACCOUNT;
       if (!sellerMainWallet) {
         return res.status(500).json({ error: 'AGENT_NOT_CONFIGURED', message: 'Seller wallet not configured. Set USDC_TOKEN_ACCOUNT env var to your main SOL wallet address.' });
       }
@@ -408,7 +1071,7 @@ export function createChatGPTAgentRoutes(
         version: 'v2',
         network: `solana:${solanaNetwork}`,
         mint: usdcMintForRequirement,
-        amount: '100000', // 0.1 USDC (6 decimals) – could come from agent metadata later
+        amount: quote.amountAtomic.toString(),
         payTo: sellerUsdcAta.toBase58(), // Use the derived ATA
         nonce,
         resource: {
@@ -425,10 +1088,14 @@ export function createChatGPTAgentRoutes(
 
       console.log(`🌐 Using Solana RPC: ${rpcUrl.substring(0, 50)}...`);
       const connection = new Connection(rpcUrl, 'confirmed');
-      const buyerKeypair = Keypair.fromSecretKey(Uint8Array.from(walletData.secretKey));
+      const userKeypair = Keypair.fromSecretKey(Uint8Array.from(walletData.secretKey));
+      const treasuryKeypair = useTreasuryPayer ? loadTreasuryKeypair() : null;
+      const paymentKeypair = treasuryKeypair || userKeypair;
       const usdcMint = new PublicKey(requirement.mint);
-      // Use the resolved token account from balance check (handles non-standard ATAs)
-      const buyerTokenAccount = resolvedTokenAccount;
+      // Use treasury ATA in treasury mode, otherwise user ATA.
+      const buyerTokenAccount = useTreasuryPayer
+        ? (treasuryTokenAccount as PublicKey)
+        : resolvedTokenAccount;
       
       // Parse seller's USDC account from 402 payment requirement
       const sellerTokenAccount = new PublicKey(requirement.payTo);
@@ -442,9 +1109,9 @@ export function createChatGPTAgentRoutes(
         // Token account doesn't exist, add instruction to create it
         transaction.add(
           createAssociatedTokenAccountInstruction(
-            buyerKeypair.publicKey, // payer
+            paymentKeypair.publicKey, // payer
             buyerTokenAccount,      // ata
-            buyerKeypair.publicKey, // owner
+            paymentKeypair.publicKey, // owner
             usdcMint                // mint
           )
         );
@@ -461,7 +1128,8 @@ export function createChatGPTAgentRoutes(
         console.log(`📝 Creating seller's USDC ATA: ${sellerTokenAccount.toBase58()} (owner: ${sellerWalletPubkey.toBase58()})`);
         transaction.add(
           createAssociatedTokenAccountInstruction(
-            buyerKeypair.publicKey,     // payer (buyer pays for seller's ATA creation - ~0.002 SOL)
+            paymentKeypair.publicKey,     // payer (treasury or buyer pays ATA rent)
+            // In treasury mode, treasury pays ATA rent.
             sellerTokenAccount,          // ata address to create
             sellerWalletPubkey,          // owner of the new ATA
             usdcMint                     // mint (USDC)
@@ -474,19 +1142,19 @@ export function createChatGPTAgentRoutes(
         createTransferInstruction(
           buyerTokenAccount,
           sellerTokenAccount,
-          buyerKeypair.publicKey,
+          paymentKeypair.publicKey,
           parseInt(requirement.amount)
         )
       );
 
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
       transaction.recentBlockhash = blockhash;
-      transaction.feePayer = buyerKeypair.publicKey;
+      transaction.feePayer = paymentKeypair.publicKey;
 
       console.log(`💸 Sending USDC payment transaction...`);
       
       // Send transaction (don't wait for confirmation to avoid timeout)
-      const signature = await connection.sendTransaction(transaction, [buyerKeypair], {
+      const signature = await connection.sendTransaction(transaction, [paymentKeypair], {
         skipPreflight: false,
         maxRetries: 2,
       });
@@ -514,9 +1182,14 @@ export function createChatGPTAgentRoutes(
         // Don't throw - transaction was still sent successfully
       }
 
+      const serviceRequestPayload = {
+        ...(serviceParams || {}),
+        user_email: userEmail,
+      };
+
       // 3. Create payment proof
       const bodyHash = createHash('sha256')
-        .update(JSON.stringify(serviceParams || {}))
+        .update(JSON.stringify(serviceRequestPayload))
         .digest('hex');
 
       const proof = {
@@ -549,11 +1222,19 @@ export function createChatGPTAgentRoutes(
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${generateInternalToken(user.id)}`,
           'Payment-Signature': encodedProof,
+          'X-Agent-Id': agentId,
+          'X-Service-Quote': b64urlEncodeJson(quote),
         },
-        body: JSON.stringify(serviceParams || {}),
+        body: JSON.stringify(serviceRequestPayload),
       });
 
       if (!serviceResponse.ok) {
+        if (reservationEntryId) {
+          await db.releaseFundingReservation({
+            reservationEntryId,
+            reason: 'service-response-not-ok',
+          });
+        }
         const error = await serviceResponse.text();
         return res.status(serviceResponse.status).json({ 
           error: 'SERVICE_FAILED',
@@ -562,6 +1243,7 @@ export function createChatGPTAgentRoutes(
       }
 
       const serviceResult = await serviceResponse.json();
+      const resultEnvelopeHeader = serviceResponse.headers.get('x-result-envelope');
 
       // 5. Record the agent-to-agent transaction
       const clusterParam = network === 'mainnet-beta' ? '' : '?cluster=devnet';
@@ -582,36 +1264,178 @@ export function createChatGPTAgentRoutes(
 
       console.log(`✅ Recorded agent-to-agent transaction: ${signature}`);
 
+      if (reservationEntryId) {
+        await db.commitFundingReservation({
+          reservationEntryId,
+          referenceType: 'onchain-payment',
+          referenceId: signature,
+        });
+      }
+
       // Calculate remaining balance
       const remainingBalance = usdcBalance - priceUsd;
 
-      res.json({
+      const responsePayload = {
+        idempotencyKey: idemContext?.idempotencyKey,
         success: true,
         service: serviceType,
         agent: agentId,
+        quote: {
+          quoteId: quote.quoteId,
+          amount: quote.amountUsd,
+          amountAtomic: quote.amountAtomic,
+          currency: quote.currency,
+          expiresAt: quote.expiresAt,
+        },
         payment: {
           amount: priceUsd,
           currency: 'USDC',
           txSignature: signature,
           explorerUrl: `https://solscan.io/tx/${signature}${clusterParam}`,
+          payer: useTreasuryPayer ? 'treasury' : 'user-wallet',
         },
         wallet: {
-          publicKey: walletData.publicKey,
-          tokenAccount: ata.toBase58(),
-          previousBalance: usdcBalance,
+          publicKey: useTreasuryPayer ? paymentKeypair.publicKey.toBase58() : walletData.publicKey,
+          tokenAccount: useTreasuryPayer ? buyerTokenAccount.toBase58() : ata.toBase58(),
+          previousBalance: effectiveBalance,
           paid: priceUsd,
-          remainingBalance: remainingBalance,
-          solscanUrl: `https://solscan.io/account/${ata.toBase58()}${clusterParam}`,
+          remainingBalance: effectiveBalance - priceUsd,
+          solscanUrl: `https://solscan.io/account/${(useTreasuryPayer ? buyerTokenAccount : ata).toBase58()}${clusterParam}`,
         },
         serviceResult,
+        ...(resultEnvelopeHeader && { resultEnvelope: resultEnvelopeHeader }),
         message: `Successfully completed ${serviceType} service and paid ${priceUsd} USDC to ${agentId}. Remaining balance: ${remainingBalance.toFixed(2)} USDC`,
-      });
+      };
+      if (idemContext) {
+        await db.completeIdempotentRequest({
+          userId: idemContext.userId,
+          endpoint: idemContext.endpoint,
+          idempotencyKey: idemContext.idempotencyKey,
+          responseCode: 200,
+          responseJson: {
+            success: true,
+            service: serviceType,
+            agent: agentId,
+            quote: {
+              quoteId: quote.quoteId,
+              amount: quote.amountUsd,
+              amountAtomic: quote.amountAtomic,
+              currency: quote.currency,
+              expiresAt: quote.expiresAt,
+            },
+            payment: {
+              amount: priceUsd,
+              currency: 'USDC',
+              txSignature: signature,
+              explorerUrl: `https://solscan.io/tx/${signature}${clusterParam}`,
+              payer: useTreasuryPayer ? 'treasury' : 'user-wallet',
+            },
+            serviceResult,
+            ...(resultEnvelopeHeader && { resultEnvelope: resultEnvelopeHeader }),
+          },
+        });
+      }
+      res.json(responsePayload);
 
     } catch (error: any) {
       console.error('Service request error:', error);
+      if (idemContext) {
+        await db.failIdempotentRequest({
+          userId: idemContext.userId,
+          endpoint: idemContext.endpoint,
+          idempotencyKey: idemContext.idempotencyKey,
+          responseCode: 500,
+          errorMessage: error.message || 'Unhandled request-service error',
+        });
+      }
       res.status(500).json({ 
         error: 'SERVICE_REQUEST_ERROR',
         message: error.message 
+      });
+    }
+  });
+
+  /**
+   * POST /api/chatgpt-agent/request-service/provider-native/submit
+   * Provider-native x402 helper:
+   * - without payment_signature: returns provider requirement + selected leg
+   * - with payment_signature: forwards paid call to provider endpoint
+   */
+  router.post('/request-service/provider-native/submit', async (req, res) => {
+    try {
+      const userEmail = req.body?.user_email || (req as any).user?.email;
+      const agentId = req.body.agentId || req.body.agent_id;
+      const serviceType = req.body.serviceType || req.body.service_type;
+      const serviceParams = req.body.serviceParams || req.body.service_params || {};
+      const paymentSignature = req.body.payment_signature || req.headers['payment-signature'];
+      if (!userEmail || !agentId || !serviceType) {
+        return res.status(400).json({
+          error: 'INVALID_REQUEST',
+          message: 'user_email, agent_id, service_type are required',
+        });
+      }
+      const user = await db.getUserByEmail(userEmail);
+      if (!user) return res.status(404).json({ error: 'USER_NOT_FOUND' });
+      const sellerAgent = await db.getRegisteredAgent(agentId);
+      if (!sellerAgent) return res.status(404).json({ error: 'AGENT_NOT_FOUND' });
+
+      const providerRaw = hydrateProviderSecret(sellerAgent?.metadata?.provider);
+      const provider = normalizeProviderConfig({
+        ...providerRaw,
+        apiKey: providerRaw?.apiKey || process.env.ARCH_TOOLS_API_KEY,
+        baseUrl: providerRaw?.baseUrl || process.env.ARCH_TOOLS_BASE_URL || providerRaw?.endpoint,
+      });
+      if (!provider || provider.pricingStrategy !== 'x402') {
+        return res.status(400).json({
+          error: 'PROVIDER_NATIVE_X402_UNAVAILABLE',
+          message: 'Provider metadata with pricingStrategy=x402 is required',
+        });
+      }
+
+      const providerChallenge = await fetchProviderX402Requirement(serviceType, serviceParams, provider);
+      const selectedAccept = selectProviderAcceptLeg(providerChallenge.requirement);
+      const paymentToSign = buildPaymentToSign(selectedAccept, providerChallenge.requirement?.resource?.url);
+      if (!paymentSignature) {
+        return res.status(402).json({
+          error: 'PROVIDER_PAYMENT_REQUIRED',
+          mode: 'provider-native-x402',
+          provider: { name: provider.name, baseUrl: provider.baseUrl, tool: providerChallenge.tool },
+          providerRequirement: providerChallenge.requirement,
+          selectedAccept,
+          paymentToSign,
+          providerPaymentRequiredHeader: providerChallenge.paymentRequiredHeader,
+          requirementSource: providerChallenge.source,
+        });
+      }
+
+      const url = resolveProviderExecuteUrl(provider, providerChallenge.tool);
+      const providerRes = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Payment-Signature': String(paymentSignature),
+        },
+        body: JSON.stringify(serviceParams),
+      });
+      const text = await providerRes.text();
+      let parsed: any;
+      try {
+        parsed = text ? JSON.parse(text) : {};
+      } catch {
+        parsed = { raw: text };
+      }
+      return res.status(providerRes.status).json({
+        mode: 'provider-native-x402',
+        provider: { name: provider.name, baseUrl: provider.baseUrl, tool: providerChallenge.tool },
+        selectedAccept,
+        paymentToSign,
+        providerStatus: providerRes.status,
+        providerResponse: parsed,
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        error: 'PROVIDER_NATIVE_X402_SUBMIT_ERROR',
+        message: error.message,
       });
     }
   });
