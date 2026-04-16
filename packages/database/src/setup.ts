@@ -89,7 +89,7 @@ const defaultPolicies: Policy[] = [
     priority: 80,
     conditions: {},
     rules: {
-      allowedMerchants: ['ArtisanLeatherCo', 'MinimalGoods', 'OfficeComfort', 'TechAudio', 'SilverCraft'],
+      allowedMerchants: ['ArtisanLeatherCo', 'MinimalGoods', 'OfficeComfort', 'TechAudio', 'SilverCraft', 'Firecrawl', 'firecrawl'],
       fallbackAction: 'require_approval',
     },
   },
