@@ -309,4 +309,67 @@ export class FacilitatorService {
       error: 'No matching SPL token transfer found in transaction',
     };
   }
+
+  /**
+   * Verify escrow deposit: confirm a USDC transfer went to the escrow PDA's token account.
+   * Used by the x402 facilitator to verify on-chain escrow deposits.
+   */
+  async verifyEscrowDeposit(params: {
+    txSignature: string;
+    escrowTokenAccount: string;
+    expectedAmount: string;
+    mint: string;
+    network: string;
+    commitment?: 'processed' | 'confirmed' | 'finalized';
+  }): Promise<{
+    verified: boolean;
+    buyer?: string;
+    amount?: string;
+    error?: string;
+    receiptHash?: string;
+  }> {
+    const { txSignature, escrowTokenAccount, expectedAmount, mint, network, commitment = 'confirmed' } = params;
+
+    const connection = this.getConnection(network, commitment);
+
+    let tx: ParsedTransactionWithMeta | null;
+    try {
+      tx = await connection.getParsedTransaction(txSignature, {
+        commitment: commitment as any,
+        maxSupportedTransactionVersion: 0,
+      });
+    } catch (error: any) {
+      return { verified: false, error: `RPC error: ${error.message}` };
+    }
+
+    if (!tx) return { verified: false, error: 'Transaction not found on-chain' };
+    if (tx.meta?.err) return { verified: false, error: `Transaction failed: ${JSON.stringify(tx.meta.err)}` };
+
+    const transferInfo = this.parseTokenTransfer(tx, mint, escrowTokenAccount);
+    if (!transferInfo.success) {
+      return { verified: false, error: transferInfo.error || 'No matching transfer to escrow account' };
+    }
+
+    const transferAmount = transferInfo.amount!;
+    const expected = BigInt(expectedAmount);
+    if (transferAmount < expected) {
+      return { verified: false, error: `Insufficient: expected ${expected}, got ${transferAmount}` };
+    }
+
+    const receiptHash = sha256HexUtf8(JSON.stringify({
+      txSignature,
+      escrowTokenAccount,
+      amount: transferAmount.toString(),
+      mint,
+      buyer: transferInfo.buyer,
+      verifiedAt: Math.floor(Date.now() / 1000),
+    }));
+
+    return {
+      verified: true,
+      buyer: transferInfo.buyer,
+      amount: transferAmount.toString(),
+      receiptHash,
+    };
+  }
 }

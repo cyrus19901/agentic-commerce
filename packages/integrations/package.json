@@ -12,7 +12,9 @@
     "@agentic-commerce/shared": "*",
     "@solana/spl-token": "^0.3.11",
     "@solana/web3.js": "^1.98.4",
-    "stripe": "^20.2.0"
+    "stripe": "^20.2.0",
+    "viem": "^2.47.14",
+    "x402-fetch": "^1.1.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

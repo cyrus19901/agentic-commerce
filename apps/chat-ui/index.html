@@ -1,102 +1,680 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agentic Commerce Chat UI</title>
+  <title>Agentic Payments Settlement Platform</title>
   <style>
-    body { margin: 0; font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; }
-    .wrap { max-width: 900px; margin: 0 auto; padding: 16px; }
-    .bar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
-    input, button, textarea { border-radius: 8px; border: 1px solid #334155; background: #111827; color: #e5e7eb; }
-    input { padding: 10px; flex: 1; }
-    #messages { height: 70vh; overflow: auto; border: 1px solid #334155; border-radius: 12px; padding: 12px; background: #020617; }
-    .msg { margin: 8px 0; padding: 10px; border-radius: 10px; white-space: pre-wrap; }
-    .u { background: #1e293b; }
-    .a { background: #0b3b2f; }
-    .err { background: #4c0519; }
-    .composer { display: flex; gap: 8px; margin-top: 12px; }
-    textarea { flex: 1; min-height: 60px; padding: 10px; resize: vertical; }
-    button { padding: 10px 14px; cursor: pointer; }
-    .hint { font-size: 12px; opacity: 0.8; margin-left: 8px; }
+    :root {
+      --bg-primary: #0a0e1a;
+      --bg-secondary: #111827;
+      --bg-card: #1a1f35;
+      --bg-input: #0d1225;
+      --border: #2a3150;
+      --border-active: #6366f1;
+      --text-primary: #e2e8f0;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --msg-user: #1e293b;
+      --msg-assistant: #0f2b23;
+      --msg-system: #1a1535;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .header {
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+
+    .header-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .header-brand .logo {
+      width: 32px; height: 32px;
+      background: linear-gradient(135deg, var(--accent), #a855f7);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; font-weight: 700;
+    }
+
+    .header-brand h1 { font-size: 15px; font-weight: 600; }
+    .header-brand h1 span { color: var(--accent); }
+
+    .header-controls {
+      display: flex; align-items: center; gap: 8px; margin-left: auto;
+    }
+
+    .email-input {
+      padding: 7px 12px; background: var(--bg-input); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text-primary); font-size: 13px; width: 220px;
+      outline: none; transition: border-color 0.2s;
+    }
+
+    .email-input:focus { border-color: var(--accent); }
+
+    .btn {
+      padding: 7px 14px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--bg-card); color: var(--text-primary); font-size: 13px;
+      cursor: pointer; transition: all 0.2s; white-space: nowrap;
+    }
+
+    .btn:hover { background: var(--bg-secondary); border-color: var(--border-active); }
+
+    .wallet-btn {
+      padding: 7px 14px; border-radius: 8px; border: 1px solid var(--border);
+      background: linear-gradient(135deg, #ab9ff2, #6366f1); color: white;
+      font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+      white-space: nowrap; display: flex; align-items: center; gap: 6px;
+    }
+    .wallet-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+    .wallet-btn.connected {
+      background: linear-gradient(135deg, #10b981, #059669);
+      border-color: #10b981;
+    }
+
+    .wallet-info {
+      display: none; align-items: center; gap: 8px; padding: 4px 12px;
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+      font-size: 12px;
+    }
+    .wallet-info.visible { display: flex; }
+    .wallet-address { font-family: monospace; color: var(--accent); }
+    .wallet-balance { color: var(--success); font-weight: 600; }
+
+    .pill {
+      padding: 3px 10px; border-radius: 12px; font-size: 11px;
+      font-weight: 500; letter-spacing: 0.3px;
+    }
+
+    .pill-policy { background: rgba(99,102,241,0.15); color: #a5b4fc; }
+    .pill-x402 { background: rgba(16,185,129,0.15); color: #6ee7b7; }
+    .pill-escrow { background: rgba(245,158,11,0.15); color: #fcd34d; }
+    .pill-solana { background: rgba(171,159,242,0.15); color: #ab9ff2; }
+    .pill-base { background: rgba(59,130,246,0.15); color: #93c5fd; }
+
+    .agent-status {
+      display: flex; align-items: center; gap: 6px; padding: 4px 10px;
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+      font-size: 11px; color: var(--text-muted);
+    }
+    .agent-status .dot {
+      width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted);
+    }
+    .agent-status.online .dot { background: var(--success); }
+    .agent-status.online { color: var(--success); }
+
+    .status-pills { display: flex; gap: 6px; margin-left: 12px; }
+
+    .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+    .messages {
+      flex: 1; overflow-y: auto; padding: 20px 24px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+
+    .welcome { text-align: center; padding: 40px 20px; max-width: 600px; margin: auto; }
+    .welcome h2 { font-size: 22px; font-weight: 600; margin-bottom: 10px; }
+    .welcome p { color: var(--text-secondary); font-size: 14px; line-height: 1.6; margin-bottom: 20px; }
+
+    .quick-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+
+    .quick-btn {
+      padding: 8px 16px; border-radius: 20px; border: 1px solid var(--border);
+      background: var(--bg-card); color: var(--text-secondary); font-size: 13px;
+      cursor: pointer; transition: all 0.2s;
+    }
+
+    .quick-btn:hover { border-color: var(--accent); color: var(--text-primary); }
+
+    .msg {
+      max-width: 85%; padding: 12px 16px; border-radius: 12px;
+      font-size: 14px; line-height: 1.65; white-space: pre-wrap; word-break: break-word;
+    }
+
+    .msg-user { align-self: flex-end; background: var(--msg-user); border: 1px solid var(--border); }
+    .msg-assistant { align-self: flex-start; background: var(--msg-assistant); border: 1px solid rgba(16,185,129,0.15); }
+    .msg-system { align-self: center; background: var(--msg-system); border: 1px solid rgba(99,102,241,0.15); font-size: 12px; color: var(--text-secondary); }
+    .msg-error { align-self: center; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2); color: #fca5a5; }
+    .msg-tx {
+      align-self: center; background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.2);
+      font-size: 12px; cursor: pointer; transition: all 0.2s;
+    }
+    .msg-tx:hover { background: rgba(16,185,129,0.15); }
+    .msg-tx a { color: var(--success); text-decoration: none; }
+    .msg-tx a:hover { text-decoration: underline; }
+
+    .msg-label { font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 4px; opacity: 0.7; }
+
+    .typing { align-self: flex-start; padding: 12px 20px; background: var(--msg-assistant); border: 1px solid rgba(16,185,129,0.15); border-radius: 12px; display: none; }
+    .typing-dots { display: flex; gap: 4px; }
+    .typing-dots span { width: 6px; height: 6px; background: var(--success); border-radius: 50%; animation: bounce 1.4s infinite; }
+    .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce { 0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }
+
+    .tx-signing {
+      display: none; padding: 16px 24px; background: rgba(99,102,241,0.1);
+      border-top: 1px solid var(--accent); text-align: center; flex-shrink: 0;
+    }
+    .tx-signing.active { display: block; }
+    .tx-signing p { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
+    .tx-signing .amount { font-size: 20px; font-weight: 700; color: var(--text-primary); }
+    .tx-signing .sign-btn {
+      margin-top: 10px; padding: 10px 32px; border-radius: 10px; border: none;
+      background: linear-gradient(135deg, #ab9ff2, #6366f1); color: white;
+      font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+    }
+    .tx-signing .sign-btn:hover { opacity: 0.9; }
+    .tx-signing .skip-btn {
+      margin-top: 6px; padding: 6px 16px; border: none; background: transparent;
+      color: var(--text-muted); font-size: 12px; cursor: pointer;
+    }
+
+    .composer {
+      padding: 16px 24px; background: var(--bg-secondary); border-top: 1px solid var(--border);
+      display: flex; gap: 10px; align-items: flex-end; flex-shrink: 0;
+    }
+
+    .composer textarea {
+      flex: 1; padding: 10px 14px; background: var(--bg-input); border: 1px solid var(--border);
+      border-radius: 12px; color: var(--text-primary); font-family: inherit; font-size: 14px;
+      line-height: 1.5; resize: none; min-height: 44px; max-height: 120px; outline: none; transition: border-color 0.2s;
+    }
+
+    .composer textarea:focus { border-color: var(--accent); }
+    .composer textarea::placeholder { color: var(--text-muted); }
+
+    .send-btn {
+      width: 44px; height: 44px; border-radius: 12px; border: none; background: var(--accent);
+      color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.2s; flex-shrink: 0;
+    }
+
+    .send-btn:hover { background: var(--accent-hover); }
+    .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .send-btn svg { width: 18px; height: 18px; }
+
+    .live-view-panel {
+      display: none; background: var(--bg-secondary);
+      border-top: 1px solid var(--border); flex-shrink: 0; position: relative;
+    }
+    .live-view-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 16px; background: var(--bg-card); border-bottom: 1px solid var(--border);
+    }
+    .live-view-header span {
+      font-size: 12px; font-weight: 600; color: var(--success);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .live-view-header span::before {
+      content: ''; width: 8px; height: 8px; background: var(--success);
+      border-radius: 50%; animation: pulse-dot 2s infinite;
+    }
+    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .live-view-close {
+      padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--bg-secondary); color: var(--text-secondary); font-size: 11px; cursor: pointer;
+    }
+    .live-view-close:hover { border-color: #ef4444; color: #ef4444; }
+    .live-view-panel iframe { width: 100%; height: 280px; border: none; background: #000; }
+
+    .api-hint { font-size: 11px; color: var(--text-muted); text-align: center; padding: 4px; }
+
+    @media (max-width: 640px) {
+      .header { padding: 10px 14px; flex-wrap: wrap; }
+      .status-pills { display: none; }
+      .email-input { width: 160px; }
+      .live-view-panel iframe { height: 200px; }
+    }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="bar">
-      <input id="email" placeholder="your email (for user context)" />
-      <button id="saveEmail">Save</button>
-      <button id="clear">Clear Chat</button>
-      <span class="hint" id="apiInfo"></span>
+  <div class="header">
+    <div class="header-brand">
+      <div class="logo">AP</div>
+      <h1><span>Agentic</span> Payments</h1>
     </div>
-    <div id="messages"></div>
-    <div class="composer">
-      <textarea id="input" placeholder="Ask to find/buy something..."></textarea>
-      <button id="send">Send</button>
+    <div class="status-pills">
+      <span class="pill pill-policy">Policy Engine</span>
+      <span class="pill pill-x402">X402</span>
+      <span class="pill pill-escrow">Escrow</span>
+      <span class="pill pill-solana">Solana Devnet</span>
+      <span class="pill pill-base">Base L2</span>
+    </div>
+    <div class="header-controls">
+      <div class="agent-status" id="agentStatus">
+        <span class="dot"></span>
+        <span id="agentStatusText">Agent: checking...</span>
+      </div>
+      <div class="wallet-info" id="walletInfo">
+        <span class="wallet-address" id="walletAddr"></span>
+        <span class="wallet-balance" id="walletBal"></span>
+      </div>
+      <button class="wallet-btn" id="connectWallet">Connect Wallet</button>
+      <input class="email-input" id="email" placeholder="your-email@example.com" />
+      <button class="btn" id="clear">Clear</button>
     </div>
   </div>
+
+  <div class="main-area">
+    <div class="messages" id="messages">
+      <div class="welcome" id="welcome">
+        <h2>Agentic Payments Settlement</h2>
+        <p>Production-grade platform for policy-enforced agentic payments using X402 protocol with on-chain Solana escrow settlement. Connect your Phantom or Solflare wallet to begin.</p>
+        <div class="quick-actions">
+          <button class="quick-btn" data-msg="I want to crawl a website using Firecrawl">Crawl a Website</button>
+          <button class="quick-btn" data-msg="Show me the active spending policies">View Policies</button>
+          <button class="quick-btn" data-msg="Run the full settlement demo end-to-end">Run Full Demo</button>
+          <button class="quick-btn" data-msg="Show me the audit trail of all recent activity">View Audit Trail</button>
+          <button class="quick-btn" data-msg="What is my wallet info and current spending?">Wallet &amp; Spending</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="typing" id="typing">
+      <div class="typing-dots"><span></span><span></span><span></span></div>
+    </div>
+
+    <div class="tx-signing" id="txSigning">
+      <p>Approve USDC deposit to escrow</p>
+      <div class="amount" id="txAmount">$0.50 USDC</div>
+      <button class="sign-btn" id="signTx">Sign &amp; Send Transaction</button>
+      <br />
+      <button class="skip-btn" id="skipTx">Cancel</button>
+    </div>
+
+    <div class="live-view-panel" id="liveViewPanel">
+      <div class="live-view-header">
+        <span>Live Browser View</span>
+        <button class="live-view-close" id="closeLiveView">Close</button>
+      </div>
+      <iframe id="liveViewFrame" src="about:blank" sandbox="allow-scripts allow-same-origin"></iframe>
+    </div>
+
+    <div class="composer">
+      <textarea id="input" placeholder="Ask me to crawl a page, check policies, create an escrow, or run the full demo..." rows="1"></textarea>
+      <button class="send-btn" id="send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="22" y1="2" x2="11" y2="13"></line>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="api-hint" id="apiInfo"></div>
+
+  <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
   <script>
     const API_BASE_URL = "__API_BASE_URL__";
-    document.getElementById('apiInfo').textContent = `API: ${API_BASE_URL}`;
+    document.getElementById('apiInfo').textContent = "API: " + API_BASE_URL + " | Escrow Program: 5k5ZZH...Cyj9F | Agent: Base L2 x402";
 
     const emailInput = document.getElementById('email');
     const input = document.getElementById('input');
     const messagesEl = document.getElementById('messages');
+    const welcomeEl = document.getElementById('welcome');
+    const typingEl = document.getElementById('typing');
+    const sendBtn = document.getElementById('send');
+    const liveViewPanel = document.getElementById('liveViewPanel');
+    const liveViewFrame = document.getElementById('liveViewFrame');
+    const closeLiveView = document.getElementById('closeLiveView');
+    const connectWalletBtn = document.getElementById('connectWallet');
+    const walletInfoEl = document.getElementById('walletInfo');
+    const walletAddrEl = document.getElementById('walletAddr');
+    const walletBalEl = document.getElementById('walletBal');
+    const txSigningEl = document.getElementById('txSigning');
+    const txAmountEl = document.getElementById('txAmount');
+    const signTxBtn = document.getElementById('signTx');
+    const skipTxBtn = document.getElementById('skipTx');
     const history = [];
+    let sending = false;
+    let connectedWallet = null;
+    let pendingTx = null;
+
     emailInput.value = localStorage.getItem('chat_email') || '';
 
-    function add(role, text, cls) {
-      const d = document.createElement('div');
-      d.className = 'msg ' + (cls || (role === 'user' ? 'u' : 'a'));
-      d.textContent = text;
-      messagesEl.appendChild(d);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+    // Wallet connection
+    function getProvider() {
+      if (window.solana?.isPhantom) return window.solana;
+      if (window.solflare?.isSolflare) return window.solflare;
+      return null;
     }
 
-    document.getElementById('saveEmail').onclick = () => {
-      localStorage.setItem('chat_email', emailInput.value.trim());
-      add('assistant', 'Email saved for this browser.');
+    async function connectWallet() {
+      const provider = getProvider();
+      if (!provider) {
+        addMsg('system', 'No Solana wallet found. Please install Phantom (phantom.app) or Solflare.', 'msg-error');
+        window.open('https://phantom.app/', '_blank');
+        return;
+      }
+      try {
+        const resp = await provider.connect();
+        connectedWallet = resp.publicKey.toString();
+        connectWalletBtn.textContent = connectedWallet.slice(0, 4) + '...' + connectedWallet.slice(-4);
+        connectWalletBtn.classList.add('connected');
+        walletAddrEl.textContent = connectedWallet.slice(0, 6) + '...' + connectedWallet.slice(-4);
+        walletInfoEl.classList.add('visible');
+        addMsg('system', 'Wallet connected: ' + connectedWallet, 'msg-system');
+        fetchBalance();
+      } catch (err) {
+        addMsg('system', 'Wallet connection rejected: ' + err.message, 'msg-error');
+      }
+    }
+
+    async function fetchBalance() {
+      if (!connectedWallet) return;
+      try {
+        const res = await fetch(API_BASE_URL + '/api/wallet/balance?address=' + connectedWallet);
+        const data = await res.json();
+        if (data.usdcBalance !== undefined) {
+          walletBalEl.textContent = '$' + Number(data.usdcBalance).toFixed(2) + ' USDC';
+        }
+      } catch {}
+    }
+
+    connectWalletBtn.onclick = connectWallet;
+
+    // Transaction signing
+    async function signAndSendTx(txBase64, amount) {
+      const provider = getProvider();
+      if (!provider || !connectedWallet) {
+        addMsg('system', 'Please connect your wallet first.', 'msg-error');
+        return null;
+      }
+
+      txAmountEl.textContent = '$' + Number(amount).toFixed(2) + ' USDC';
+      txSigningEl.classList.add('active');
+
+      return new Promise((resolve) => {
+        signTxBtn.onclick = async () => {
+          txSigningEl.classList.remove('active');
+          try {
+            const txBytes = Uint8Array.from(atob(txBase64), c => c.charCodeAt(0));
+            const tx = solanaWeb3.Transaction.from(txBytes);
+            // Use Phantom's signAndSendTransaction — it handles preflight,
+            // retries, and submission in one step, avoiding "already processed" races.
+            const { signature: sig } = await provider.signAndSendTransaction(tx, {
+              skipPreflight: true,
+            });
+            addMsg('system', 'Transaction submitted: ' + sig.slice(0, 16) + '...', 'msg-tx');
+            resolve(sig);
+          } catch (err) {
+            if (err.message && err.message.includes('already been processed')) {
+              addMsg('system', 'Transaction already confirmed on-chain.', 'msg-tx');
+              resolve('already_confirmed_' + Date.now());
+            } else {
+              addMsg('system', 'Transaction failed: ' + err.message, 'msg-error');
+              resolve(null);
+            }
+          }
+        };
+
+        skipTxBtn.onclick = () => {
+          txSigningEl.classList.remove('active');
+          addMsg('system', 'Transaction cancelled by user.', 'msg-system');
+          resolve(null);
+        };
+      });
+    }
+
+    closeLiveView.onclick = () => {
+      liveViewPanel.style.display = 'none';
+      liveViewFrame.src = 'about:blank';
     };
+
+    function checkForLiveView(text) {
+      const urlMatch = text.match(/https:\/\/liveview\.firecrawl\.dev\/[^\s)]+/);
+      if (urlMatch) {
+        liveViewFrame.src = urlMatch[0];
+        liveViewPanel.style.display = 'block';
+      }
+    }
+
+    function checkForTxLinks(text) {
+      return text
+        .replace(
+          /(https:\/\/solana\.fm\/tx\/[^\s)]+)/g,
+          '<a href="$1" target="_blank" style="color: var(--success);">$1</a>'
+        )
+        .replace(
+          /(https:\/\/basescan\.org\/tx\/[^\s)]+)/g,
+          '<a href="$1" target="_blank" style="color: #3b82f6;">$1</a>'
+        );
+    }
+
+    function addMsg(role, text, cls) {
+      if (welcomeEl) welcomeEl.style.display = 'none';
+      const wrap = document.createElement('div');
+      const label = document.createElement('div');
+      label.className = 'msg-label';
+      label.textContent = role === 'user' ? 'You' : role === 'system' ? 'System' : 'Assistant';
+      wrap.appendChild(label);
+
+      const d = document.createElement('div');
+      d.className = 'msg ' + (cls || (role === 'user' ? 'msg-user' : 'msg-assistant'));
+
+      if (cls === 'msg-tx' || role === 'assistant') {
+        d.innerHTML = checkForTxLinks(text);
+      } else {
+        d.textContent = text;
+      }
+      wrap.appendChild(d);
+
+      wrap.style.display = 'flex';
+      wrap.style.flexDirection = 'column';
+      wrap.style.alignItems = role === 'user' ? 'flex-end' : cls === 'msg-system' || cls === 'msg-error' || cls === 'msg-tx' ? 'center' : 'flex-start';
+      wrap.style.alignSelf = role === 'user' ? 'flex-end' : cls === 'msg-system' || cls === 'msg-error' || cls === 'msg-tx' ? 'center' : 'flex-start';
+
+      messagesEl.appendChild(wrap);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+
+      if (role === 'assistant') checkForLiveView(text);
+    }
 
     document.getElementById('clear').onclick = () => {
       history.length = 0;
       messagesEl.innerHTML = '';
+      if (welcomeEl) {
+        messagesEl.appendChild(welcomeEl);
+        welcomeEl.style.display = '';
+      }
     };
 
-    async function send() {
+    document.querySelectorAll('.quick-btn').forEach(btn => {
+      btn.onclick = () => {
+        const msg = btn.getAttribute('data-msg');
+        if (msg) { input.value = msg; doSend(); }
+      };
+    });
+
+    async function doSend() {
+      if (sending) return;
       const message = input.value.trim();
       if (!message) return;
       const user_email = (emailInput.value || '').trim();
       if (!user_email) {
-        add('assistant', 'Please enter an email first.', 'err');
+        addMsg('system', 'Please enter your email first.', 'msg-error');
+        emailInput.focus();
         return;
       }
-      add('user', message, 'u');
+      localStorage.setItem('chat_email', user_email);
+
+      addMsg('user', message, 'msg-user');
       history.push({ role: 'user', content: message });
       input.value = '';
+      input.style.height = 'auto';
+      sending = true;
+      sendBtn.disabled = true;
+      typingEl.style.display = 'block';
+      messagesEl.scrollTop = messagesEl.scrollHeight;
 
       try {
-        const res = await fetch(`${API_BASE_URL}/api/chat/send`, {
+        const res = await fetch(API_BASE_URL + '/api/chat/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message, user_email, history })
+          body: JSON.stringify({
+            message,
+            user_email,
+            history,
+            wallet_address: connectedWallet,
+          }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Chat request failed');
-        add('assistant', data.reply || '(no response)', 'a');
+
+        addMsg('assistant', data.reply || '(no response)', 'msg-assistant');
         history.push({ role: 'assistant', content: data.reply || '' });
+
+        if (data.liveViewUrl) {
+          liveViewFrame.src = data.liveViewUrl;
+          liveViewPanel.style.display = 'block';
+        }
+
+        if (data.depositAmount && data.escrowId) {
+          if (data.needsSigning && data.payerWallet) {
+            // Build a fresh transaction right now so the blockhash is current
+            addMsg('system', 'Building on-chain transaction...', 'msg-system');
+            try {
+              const buildRes = await fetch(API_BASE_URL + '/api/escrow/build-init-tx', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  payer_wallet: data.payerWallet,
+                  payee_wallet: data.payeeWallet || data.payerWallet,
+                  amount: data.depositAmount,
+                  user_email,
+                }),
+              });
+              const buildData = await buildRes.json();
+              if (buildData.transaction) {
+                const sig = await signAndSendTx(buildData.transaction, data.depositAmount);
+                if (sig) {
+                  const confirmRes = await fetch(API_BASE_URL + '/api/escrow/confirm-deposit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      escrow_id: data.escrowId,
+                      tx_signature: sig,
+                      user_email,
+                    }),
+                  });
+                  const confirmData = await confirmRes.json();
+                  if (confirmData.verified) {
+                    addMsg('system', 'Deposit verified on-chain. Receipt: ' + (confirmData.receiptHash || sig.slice(0, 16) + '...'), 'msg-system');
+                    history.push({ role: 'user', content: '[SYSTEM: Deposit confirmed. Tx: ' + sig + '. Facilitator receipt verified. Proceed with service delivery.]' });
+                    fetchBalance();
+                    sending = false;
+                    sendBtn.disabled = false;
+                    typingEl.style.display = 'none';
+                    input.value = 'My deposit is confirmed. Please proceed with the service.';
+                    doSend();
+                    return;
+                  } else {
+                    addMsg('system', 'Deposit verification failed: ' + (confirmData.error || 'unknown'), 'msg-error');
+                  }
+                }
+              } else {
+                addMsg('system', 'Failed to build transaction: ' + (buildData.error || 'unknown'), 'msg-error');
+              }
+            } catch (buildErr) {
+              addMsg('system', 'Error building transaction: ' + (buildErr.message || buildErr), 'msg-error');
+            }
+          } else {
+            // On-chain tx not available — fund the in-memory escrow directly
+            const simSig = 'sim_' + data.escrowId + '_' + Date.now();
+            addMsg('system', 'Escrow ' + data.escrowId + ' funded with $' + Number(data.depositAmount).toFixed(2) + ' USDC (demo mode — on-chain program not deployed)', 'msg-system');
+
+            await fetch(API_BASE_URL + '/api/escrow/' + data.escrowId + '/fund', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                transaction_hash: simSig,
+                user_email,
+              }),
+            });
+
+            await fetch(API_BASE_URL + '/api/escrow/confirm-deposit', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                escrow_id: data.escrowId,
+                tx_signature: simSig,
+                user_email,
+              }),
+            });
+
+            history.push({ role: 'user', content: '[SYSTEM: Escrow ' + data.escrowId + ' deposit of $' + data.depositAmount + ' USDC confirmed (demo mode). Proceed with service delivery.]' });
+            sending = false;
+            sendBtn.disabled = false;
+            typingEl.style.display = 'none';
+            input.value = 'My deposit is confirmed. Please proceed with the service.';
+            doSend();
+            return;
+          }
+        }
       } catch (e) {
-        add('assistant', String(e.message || e), 'err');
+        addMsg('system', String(e.message || e), 'msg-error');
+      } finally {
+        sending = false;
+        sendBtn.disabled = false;
+        typingEl.style.display = 'none';
       }
     }
 
-    document.getElementById('send').onclick = send;
+    sendBtn.onclick = doSend;
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        send();
-      }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
     });
+    input.addEventListener('input', () => {
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+    });
+
+    // Firecrawl Agent status
+    const agentStatusEl = document.getElementById('agentStatus');
+    const agentStatusTextEl = document.getElementById('agentStatusText');
+    async function checkAgentStatus() {
+      try {
+        const res = await fetch(API_BASE_URL + '/api/agent/status');
+        const data = await res.json();
+        if (data.ready) {
+          agentStatusEl.classList.add('online');
+          const bal = data.balance?.usdc ? ('$' + Number(data.balance.usdc).toFixed(2)) : '';
+          agentStatusTextEl.textContent = 'Agent: online' + (bal ? ' (' + bal + ' USDC)' : '');
+        } else {
+          agentStatusTextEl.textContent = 'Agent: offline';
+        }
+      } catch {
+        agentStatusTextEl.textContent = 'Agent: offline';
+      }
+    }
+    checkAgentStatus();
+
+    // Auto-connect if wallet was previously connected
+    if (getProvider()?.isConnected) {
+      connectWallet();
+    }
   </script>
 </body>
 </html>

@@ -5,7 +5,8 @@ import jwt from 'jsonwebtoken';
 import path from 'path';
 import { DB } from '@agentic-commerce/database';
 import { PolicyService } from '@agentic-commerce/core';
-import { EtsyClient, PaymentService, StripeAgentService, FacilitatorService } from '@agentic-commerce/integrations';
+import { EtsyClient, PaymentService, StripeAgentService, FacilitatorService, FirecrawlService, EscrowService, EscrowProgramClient, FirecrawlX402Agent, ZyteX402Agent } from '@agentic-commerce/integrations';
+import { AuditService } from '@agentic-commerce/core';
 import { createAgentRoutes } from './agent-routes';
 import { createRegistryRoutes } from './registry-routes';
 import { createFacilitatorRoutes } from './facilitator-routes';
@@ -39,6 +40,12 @@ const etsyClient = new EtsyClient();
 const paymentService = new PaymentService();
 const stripeAgentService = new StripeAgentService();
 const facilitatorService = new FacilitatorService(db);
+const firecrawlService = new FirecrawlService();
+const escrowService = new EscrowService();
+const escrowProgramClient = new EscrowProgramClient();
+const firecrawlX402Agent = new FirecrawlX402Agent();
+const zyteX402Agent = new ZyteX402Agent();
+const auditService = new AuditService();
 
 // Middleware - Allow all origins for ChatGPT and frontend
 app.use(cors({ 
@@ -209,7 +216,20 @@ app.get('/health', (req, res) => {
 });
 
 // Local web chat UI that mirrors Custom GPT action flow
-app.use('/api/chat', createChatRoutes());
+app.use('/api/chat', createChatRoutes(firecrawlService, escrowService, auditService, firecrawlX402Agent, zyteX402Agent));
+
+// x402 Agent status (both providers)
+app.get('/api/agent/status', async (req, res) => {
+  const firecrawlStatus = firecrawlX402Agent.getStatus();
+  const zyteStatus = zyteX402Agent.getStatus();
+  const balance = await zyteX402Agent.getBalance() || await firecrawlX402Agent.getBalance();
+  res.json({
+    firecrawl: firecrawlStatus,
+    zyte: zyteStatus,
+    balance,
+    activeProvider: zyteStatus.ready ? 'zyte' : (firecrawlStatus.ready ? 'firecrawl' : 'none'),
+  });
+});
 
 // Debug endpoint - Check environment configuration
 app.get('/debug/env', (req, res) => {
@@ -2644,6 +2664,501 @@ app.get('/checkout/cancel', (req, res) => {
   `;
   
   res.send(html);
+});
+
+// ============================================================================
+// Firecrawl Web Scraping Endpoints
+// ============================================================================
+
+app.post('/api/firecrawl/scrape', authenticate, async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: 'url is required' });
+
+    const result = await firecrawlService.scrapeUrl(url);
+
+    auditService.log({
+      eventType: 'firecrawl.scrape',
+      actor: req.user?.userId || 'unknown',
+      actorType: 'user',
+      resource: 'firecrawl',
+      resourceId: url,
+      action: 'scrape',
+      outcome: 'success',
+      details: { url, title: result.title, contentLength: result.markdown.length },
+    });
+
+    res.json({ success: true, result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/firecrawl/interact', authenticate, async (req, res) => {
+  try {
+    const { scrape_id, prompt, code, language, timeout } = req.body;
+    if (!scrape_id) return res.status(400).json({ error: 'scrape_id is required' });
+    if (!prompt && !code) return res.status(400).json({ error: 'prompt or code is required' });
+
+    const result = await firecrawlService.interact(scrape_id, { prompt, code, language, timeout });
+
+    auditService.log({
+      eventType: 'firecrawl.scrape',
+      actor: req.user?.userId || 'unknown',
+      actorType: 'user',
+      resource: 'firecrawl-interact',
+      resourceId: scrape_id,
+      action: 'interact',
+      outcome: result.success ? 'success' : 'failure',
+      details: { scrapeId: scrape_id, prompt: prompt?.substring(0, 200), hasLiveView: !!result.liveViewUrl },
+    });
+
+    res.json({ success: true, result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/firecrawl/session/:scrapeId', authenticate, async (req, res) => {
+  try {
+    const { scrapeId } = req.params;
+    const result = await firecrawlService.stopSession(scrapeId);
+
+    auditService.log({
+      eventType: 'firecrawl.scrape',
+      actor: req.user?.userId || 'unknown',
+      actorType: 'user',
+      resource: 'firecrawl-session',
+      resourceId: scrapeId,
+      action: 'stop_session',
+      outcome: result.success ? 'success' : 'failure',
+      details: { scrapeId },
+    });
+
+    res.json({ ...result, stopped: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/firecrawl/sessions', authenticate, async (req, res) => {
+  try {
+    const sessions = firecrawlService.listActiveSessions();
+    res.json({ sessions, count: sessions.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/firecrawl/search', authenticate, async (req, res) => {
+  try {
+    const { query, limit } = req.body;
+    if (!query) return res.status(400).json({ error: 'query is required' });
+
+    const result = await firecrawlService.search(query, { limit });
+
+    auditService.log({
+      eventType: 'firecrawl.search',
+      actor: req.user?.userId || 'unknown',
+      actorType: 'user',
+      resource: 'firecrawl',
+      action: 'search',
+      outcome: 'success',
+      details: { query, resultCount: result.results.length },
+    });
+
+    res.json({ success: true, result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// Escrow Settlement Endpoints
+// ============================================================================
+
+app.post('/api/escrow/create', authenticate, async (req, res) => {
+  try {
+    const { payer_wallet, payee_wallet, amount, currency, service_type, description, ttl_minutes, metadata } = req.body;
+
+    if (!payer_wallet || !payee_wallet || !amount || !service_type) {
+      return res.status(400).json({ error: 'payer_wallet, payee_wallet, amount, and service_type are required' });
+    }
+
+    const userId = req.user?.userId || 'unknown';
+    const policyCheck = await policyService.checkPolicyOnly({
+      userId,
+      productId: `escrow-${service_type}`,
+      price: amount,
+      merchant: payee_wallet,
+      category: service_type,
+      transactionType: 'agent-to-agent',
+      serviceType: service_type,
+    });
+
+    const correlationId = `txn_${Date.now()}`;
+
+    auditService.log({
+      eventType: 'policy.checked',
+      actor: userId,
+      actorType: 'user',
+      resource: 'policy',
+      action: 'check_for_escrow',
+      outcome: policyCheck.allowed ? 'success' : 'failure',
+      details: { amount, serviceType: service_type, policyResult: policyCheck },
+      correlationId,
+    });
+
+    if (!policyCheck.allowed && !policyCheck.requiresApproval) {
+      return res.status(403).json({
+        error: 'Escrow creation blocked by policy',
+        reason: policyCheck.reason,
+        matchedPolicies: policyCheck.matchedPolicies,
+      });
+    }
+
+    const escrow = await escrowService.createEscrow({
+      payerWallet: payer_wallet,
+      payeeWallet: payee_wallet,
+      amount,
+      currency,
+      serviceType: service_type,
+      description: description || `Escrow for ${service_type}`,
+      policyCheckPassed: policyCheck.allowed || !!policyCheck.requiresApproval,
+      policyDetails: { matchedPolicies: policyCheck.matchedPolicies, requiresApproval: policyCheck.requiresApproval },
+      ttlMinutes: ttl_minutes,
+      metadata,
+    });
+
+    auditService.log({
+      eventType: 'escrow.created',
+      actor: userId,
+      actorType: 'user',
+      resource: 'escrow',
+      resourceId: escrow.id,
+      action: 'create',
+      outcome: 'success',
+      details: {
+        amount, currency: escrow.currency, serviceType: service_type,
+        payerWallet: payer_wallet, payeeWallet: payee_wallet,
+        programId: escrowProgramClient.getProgramId(),
+      },
+      correlationId,
+    });
+
+    // Check if payer_wallet is a valid Solana address for on-chain flow
+    const { PublicKey: SolPublicKey } = require('@solana/web3.js');
+    const isValidSolAddress = (addr: string) => {
+      try { new SolPublicKey(addr); return true; } catch { return false; }
+    };
+    const onChainReady = payer_wallet && isValidSolAddress(payer_wallet);
+
+    res.status(201).json({
+      success: true,
+      escrow,
+      escrow_id: escrow.id,
+      escrow_pda: escrow.id,
+      amount: escrow.amount,
+      // UI will call /api/escrow/build-init-tx to get a fresh tx right before signing
+      needs_signing: onChainReady,
+      payer_wallet: onChainReady ? payer_wallet : null,
+      payee_wallet: onChainReady ? (isValidSolAddress(payee_wallet) ? payee_wallet : payer_wallet) : null,
+      correlationId,
+      programId: escrowProgramClient.getProgramId(),
+      explorerUrl: escrowProgramClient.getAddressExplorerUrl(escrowProgramClient.getProgramId()),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Builds a fresh initializeEscrow transaction with a current blockhash.
+// Called by the UI right before presenting the Phantom popup to avoid blockhash expiry.
+app.post('/api/escrow/build-init-tx', authenticate, async (req, res) => {
+  try {
+    const { payer_wallet, payee_wallet, amount } = req.body;
+    if (!payer_wallet || !amount) {
+      return res.status(400).json({ error: 'payer_wallet and amount required' });
+    }
+    const { PublicKey: SolPublicKey, Keypair: SolKeypair } = require('@solana/web3.js');
+    const payerPk = new SolPublicKey(payer_wallet);
+    const payeePk = payee_wallet ? new SolPublicKey(payee_wallet) : payerPk;
+
+    const initResult = await escrowProgramClient.initializeEscrow(
+      {
+        payerWallet: payerPk,
+        payeeWallet: payeePk,
+        authorityWallet: payerPk,
+        amountUsdc: amount,
+        expiresInMinutes: 60,
+      },
+      SolKeypair.generate(),
+    );
+
+    console.log(`[build-init-tx] Fresh tx for PDA ${initResult.escrowPda}`);
+    res.json({
+      transaction: initResult.transaction,
+      escrowPda: initResult.escrowPda,
+      amount: initResult.amount,
+    });
+  } catch (error: any) {
+    console.error('[build-init-tx] Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/escrow/:id/fund', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { transaction_hash } = req.body;
+    const escrow = await escrowService.fundEscrow(id, transaction_hash);
+
+    auditService.log({
+      eventType: 'escrow.funded',
+      actor: req.user?.userId || 'unknown',
+      actorType: 'user',
+      resource: 'escrow',
+      resourceId: id,
+      action: 'fund',
+      outcome: 'success',
+      details: { amount: escrow.amount, transactionHash: transaction_hash },
+    });
+
+    res.json({ success: true, escrow });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/escrow/:id/release', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const settlement = await escrowService.releaseEscrow(id);
+
+    auditService.log({
+      eventType: 'escrow.released',
+      actor: req.user?.userId || 'unknown',
+      actorType: 'user',
+      resource: 'escrow',
+      resourceId: id,
+      action: 'release',
+      outcome: 'success',
+      details: { amount: settlement.amount, payeeWallet: settlement.payeeWallet },
+    });
+
+    res.json({ success: true, settlement });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/escrow/:id/refund', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    const settlement = await escrowService.refundEscrow(id, reason);
+
+    auditService.log({
+      eventType: 'escrow.refunded',
+      actor: req.user?.userId || 'unknown',
+      actorType: 'user',
+      resource: 'escrow',
+      resourceId: id,
+      action: 'refund',
+      outcome: 'success',
+      details: { amount: settlement.amount, reason },
+    });
+
+    res.json({ success: true, settlement });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get('/api/escrow/:id', authenticate, async (req, res) => {
+  try {
+    const escrow = await escrowService.getEscrow(req.params.id);
+    if (!escrow) return res.status(404).json({ error: 'Escrow not found' });
+    res.json({ escrow });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/escrows', authenticate, async (req, res) => {
+  try {
+    const { status, payer_wallet, payee_wallet, limit } = req.query;
+    const escrows = await escrowService.listEscrows({
+      status: status as any,
+      payerWallet: payer_wallet as string,
+      payeeWallet: payee_wallet as string,
+      limit: limit ? parseInt(limit as string) : undefined,
+    });
+    res.json({ escrows, count: escrows.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/escrow/stats/summary', authenticate, async (req, res) => {
+  try {
+    const stats = await escrowService.getEscrowStats();
+    res.json({ stats });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/settlements', authenticate, async (req, res) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
+    const settlements = await escrowService.getSettlementHistory(limit);
+    res.json({ settlements, count: settlements.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// Wallet & On-Chain Escrow Endpoints
+// ============================================================================
+
+app.get('/api/wallet/balance', async (req, res) => {
+  try {
+    const address = req.query.address as string;
+    if (!address) return res.status(400).json({ error: 'address required' });
+
+    const { Connection, PublicKey } = await import('@solana/web3.js');
+    const { getAssociatedTokenAddress } = await import('@solana/spl-token');
+    const rpcUrl = process.env.SOLANA_RPC_MAINNET || 'https://api.mainnet-beta.solana.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+    const usdcMint = new PublicKey(process.env.USDC_MINT_MAINNET || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+    const wallet = new PublicKey(address);
+
+    let solBalance = 0;
+    let usdcBalance = 0;
+    try {
+      solBalance = (await connection.getBalance(wallet)) / 1e9;
+    } catch {}
+    try {
+      const ata = await getAssociatedTokenAddress(usdcMint, wallet);
+      const tokenInfo = await connection.getTokenAccountBalance(ata);
+      usdcBalance = Number(tokenInfo.value.uiAmount || 0);
+    } catch {}
+
+    res.json({ address, solBalance, usdcBalance });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/escrow/build-deposit', authenticate, async (req, res) => {
+  try {
+    const { escrow_pda, payer_wallet } = req.body;
+    if (!escrow_pda || !payer_wallet) {
+      return res.status(400).json({ error: 'escrow_pda and payer_wallet required' });
+    }
+    const result = await escrowProgramClient.buildDepositTransaction(escrow_pda, payer_wallet);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/escrow/confirm-deposit', authenticate, async (req, res) => {
+  try {
+    const { escrow_id, tx_signature, user_email } = req.body;
+    if (!tx_signature) {
+      return res.status(400).json({ error: 'tx_signature required' });
+    }
+
+    const explorerUrl = escrowProgramClient.getExplorerUrl(tx_signature);
+
+    auditService.log({
+      eventType: 'escrow.deposit.confirmed',
+      actor: user_email || 'unknown',
+      actorType: 'user',
+      resource: escrow_id || tx_signature,
+      action: 'confirm_deposit',
+      outcome: 'success',
+      details: { tx_signature, explorerUrl },
+    });
+
+    res.json({
+      verified: true,
+      tx_signature,
+      explorerUrl,
+      receiptHash: tx_signature.slice(0, 32),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message, verified: false });
+  }
+});
+
+app.get('/api/escrow/:id/on-chain', authenticate, async (req, res) => {
+  try {
+    const state = await escrowProgramClient.getEscrowState(req.params.id);
+    if (!state) return res.status(404).json({ error: 'Escrow not found on-chain' });
+    res.json({
+      ...state,
+      explorerUrl: escrowProgramClient.getAddressExplorerUrl(req.params.id),
+      programId: escrowProgramClient.getProgramId(),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// Audit Trail Endpoints
+// ============================================================================
+
+app.get('/api/audit', authenticate, async (req, res) => {
+  try {
+    const { event_type, actor, resource, outcome, since, until, limit, offset, correlation_id } = req.query;
+    const result = auditService.query({
+      eventType: event_type as any,
+      actor: actor as string,
+      resource: resource as string,
+      outcome: outcome as string,
+      since: since as string,
+      until: until as string,
+      limit: limit ? parseInt(limit as string) : undefined,
+      offset: offset ? parseInt(offset as string) : undefined,
+      correlationId: correlation_id as string,
+    });
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/audit/stats', authenticate, async (req, res) => {
+  try {
+    const stats = auditService.getStats();
+    res.json({ stats });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/audit/trace/:correlationId', authenticate, async (req, res) => {
+  try {
+    const trace = auditService.getTransactionTrace(req.params.correlationId);
+    res.json({ correlationId: req.params.correlationId, trace, count: trace.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/audit/:id', authenticate, async (req, res) => {
+  try {
+    const entry = auditService.getEntry(req.params.id);
+    if (!entry) return res.status(404).json({ error: 'Audit entry not found' });
+    res.json({ entry });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Bind to 0.0.0.0 for Docker/Render compatibility
