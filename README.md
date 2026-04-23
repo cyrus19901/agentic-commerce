@@ -1,951 +1,174 @@
-# 🛍️ Agentic Commerce - ChatGPT Shopping Assistant
+# Agentic Commerce Platform
 
-A complete ChatGPT-powered shopping assistant with policy enforcement, product search, and express checkout capabilities. Built with Express, TypeScript, Stripe, and SQLite.
+Multi-tenant facilitation-as-a-service for agentic payments. Policy enforcement, X402 settlement, on-chain verification, and full audit trail.
 
-## ✨ Features
+## What It Does
 
-- 🤖 **ChatGPT Integration** - Natural conversation-based shopping
-- 🔍 **Product Search** - Search Etsy products (with mock data for testing)
-- 📋 **Policy Enforcement** - Automatic budget and transaction limit checking
-- ✅ **Approval Workflows** - Manual approval for purchases exceeding policy limits
-- 💰 **Spending Tracking** - Daily, weekly, and monthly spending reports
-- ⚡ **Express Checkout** - Quick purchase flow via Stripe
-- 🔄 **ACP-Compliant** - Implements Agentic Commerce Protocol endpoints
-- 🐳 **Docker Ready** - Run anywhere with Docker
-- 🔒 **JWT Authentication** - Secure API access
-- 📊 **SQLite Database** - Lightweight and portable
+Any company or developer can integrate with this platform to:
 
-## 🚀 Quick Start: GPT Agent + Docker Backend
+1. **Enforce policies** on agentic payments (budget limits, merchant restrictions, URL allowlists, time-based rules)
+2. **Settle payments** via the X402 protocol on Base (EVM) through registered providers (Firecrawl, Zyte, etc.)
+3. **Audit every transaction** with a correlated, queryable audit trail
+4. **Manage treasury** with off-chain balances, holds, and on-chain reconciliation
 
-### Prerequisites & Dependencies
+## Architecture
 
-#### Required for Docker Setup
-
-1. **Docker Desktop** (Mac/Windows) or **Docker Engine** (Linux)
-   - **Mac**: [Download Docker Desktop for Mac](https://docs.docker.com/desktop/install/mac-install/)
-   - **Windows**: [Download Docker Desktop for Windows](https://docs.docker.com/desktop/install/windows-install/)
-   - **Linux**: Install Docker Engine + Docker Compose
-     ```bash
-     # Ubuntu/Debian
-     curl -fsSL https://get.docker.com -o get-docker.sh
-     sudo sh get-docker.sh
-     sudo apt-get install docker-compose-plugin
-     ```
-   - **Verify installation**:
-     ```bash
-     docker --version          # Should show v20.10 or higher
-     docker compose version    # Should show v2.0 or higher
-     ```
-
-2. **System Requirements**
-   - **RAM**: 4GB minimum (8GB recommended)
-   - **Disk Space**: 2GB free for Docker images and containers
-   - **OS**: 
-     - macOS 10.15 or later (Catalina+)
-     - Windows 10/11 with WSL2
-     - Linux (kernel 3.10+)
-
-3. **Build Dependencies** (automatically installed in Docker)
-   - **Node.js 20+**: JavaScript runtime
-   - **Python 3**: Required for building native modules (SQLite, Prisma)
-   - **g++**: C++ compiler for native bindings (Stripe SDK, SQLite)
-   - **make**: Build tool for native modules
-   - **SQLite**: Database engine
-
-4. **ChatGPT Plus** subscription (for creating a custom GPT that calls this API)
-
-#### Optional Dependencies (for local development without Docker)
-
-- **Node.js**: v18+ ([Download](https://nodejs.org/))
-- **npm**: v8+ (comes with Node.js)
-- **Python 3**: For building native modules
-- **Make & g++**: Build tools
-  - Mac: `xcode-select --install`
-  - Windows: `choco install make` (requires Chocolatey) or use WSL2
-  - Linux: `sudo apt-get install build-essential`
-
-#### Network Requirements
-
-- Port **3000** available (or customize with `PORT` in `.env`)
-- Port **8080** available (for SQLite DB viewer in dev mode)
-- Internet access for:
-  - Docker image pulls
-  - ChatGPT API calls to your backend
-  - Stripe API (for payments)
-  - (Optional) Real Etsy API integration
-
-#### Verify Docker Installation
-
-Before starting, make sure Docker is working:
-
-```bash
-# Check Docker is installed
-docker --version
-docker compose version
-
-# Check Docker daemon is running
-docker info
-
-# Test Docker with hello-world
-docker run hello-world
-
-# Check available resources
-docker system df
+```
+Buyer Agent --> POST /api/v1/payments/execute
+                    |
+                    v
+              [API Key Auth + Scope Guard]
+                    |
+                    v
+              [Policy Engine] -- reject if rules violated
+                    |
+                    v
+              [Treasury Hold] -- reserve funds
+                    |
+                    v
+              [Provider Dispatch] -- Firecrawl / Zyte x402 agent
+                    |
+                    v
+              [On-Chain TX Verify] -- Base USDC transfer confirmed
+                    |
+                    v
+              [Settle + Audit Log] -- debit treasury, persist trace
 ```
 
-If any command fails:
-- **Mac/Windows**: Open Docker Desktop application and wait for it to start
-- **Linux**: Run `sudo systemctl start docker` or `sudo service docker start`
+## Quick Start
 
-### Option 1: Automated Setup (Recommended)
+### Prerequisites
 
-```bash
-cd /Users/cyrus19901/Repository/agentic-commerce
+- Node.js 20+
+- PostgreSQL 14+
+- npm 8+
 
-# Run the quick start script
-./scripts/quick-start.sh
-```
-
-This will:
-- ✅ Check Docker installation
-- 📝 Create `.env` file
-- 🔨 Build Docker images
-- 🚀 Start the backend in Docker (`api` on `http://localhost:3000`)
-- 📦 Setup SQLite database in `./data`
-- 🔑 Generate a **JWT token** for the GPT to use
-
-**Copy the JWT token** from the output – this is what your GPT will send in the `Authorization` header.
-
-### Option 2: Manual Setup
-
-#### 1. Start Docker Desktop
-
-Make sure Docker Desktop is running. Check with:
-```bash
-docker info
-```
-
-If not running, open Docker Desktop and wait for it to start.
-
-#### 2. Setup Environment
+### Setup
 
 ```bash
-cd /Users/cyrus19901/Repository/agentic-commerce
-
-# Copy environment file
-cp .env.example .env
-
-# Optional: Add Stripe API key for real payments
-# Edit .env and set STRIPE_SECRET_KEY=sk_test_...
+git clone <repo-url> && cd agentic-commerce
+cp .env.production.example .env   # fill in your values
+npm install
+npm run build
+npm run db:setup                  # runs migrations + seeds
+npm run dev                       # starts on http://localhost:3001
 ```
 
-#### 3. Build and Start
+### Your First API Call
+
+Use the seeded demo key (or the sandbox test key):
 
 ```bash
-# Build and start containers
-make dev
+# Live mode (real on-chain TX)
+curl -X POST http://localhost:3001/api/v1/payments/execute \
+  -H 'X-API-Key: ak_demo_live_test_key_2024' \
+  -H 'Content-Type: application/json' \
+  -d '{"provider":"zyte","action":"scrape","params":{"url":"https://example.com"}}'
 
-# Or without make:
-docker compose -f docker-compose.dev.yml up -d
+# Sandbox mode (no real TX, mock data)
+curl -X POST http://localhost:3001/api/v1/payments/execute \
+  -H 'X-API-Key: ak_test_sandbox_key_2024' \
+  -H 'Content-Type: application/json' \
+  -d '{"provider":"zyte","action":"scrape","params":{"url":"https://example.com"}}'
 ```
 
-Wait for containers to start (check with `make dev-logs`)
+## Authentication
 
-#### 4. Setup Database
+All `/api/v1` endpoints require an API key via the `X-API-Key` header (or `Authorization: Bearer ak_...`).
 
-```bash
-make db-setup
-```
+| Key prefix   | Mode    | Behavior                                      |
+|-------------|---------|-----------------------------------------------|
+| `ak_live_`  | Live    | Real policy checks, real on-chain payments    |
+| `ak_test_`  | Sandbox | Full flow simulation, mock providers, no TX   |
 
-#### 5. Generate JWT Token
+### Scopes
 
-```bash
-make generate-token USER=user-123
-```
+API keys can be scoped to limit access:
 
-**Save this token** - you'll need it for ChatGPT configuration.
+| Scope             | Access                                    |
+|-------------------|-------------------------------------------|
+| `*`               | Full access (default for first key)       |
+| `payments:read`   | List and view payments                    |
+| `payments:write`  | Execute payments                          |
+| `policies:read`   | View policies, dry-run checks             |
+| `policies:write`  | Create, update, delete policies           |
+| `audit:read`      | Query audit trail                         |
+| `treasury:read`   | View treasury balance and ledger          |
+| `providers:read`  | List available providers                  |
+| `admin`           | Org management, API key lifecycle, deposits |
 
-### Services Running
+## API Reference
 
-Once started, you'll have:
-- **API**: http://localhost:3000
-- **Health Check**: http://localhost:3000/health
-- **DB Viewer**: http://localhost:8080 (dev mode only)
+Full API documentation: [docs/api-reference.md](docs/api-reference.md)
 
-### How the GPT Talks to the Docker Backend
+Interactive spec: `GET /api/v1/openapi.json`
 
-At a high level:
+### Endpoint Summary
 
-1. **Docker** runs the Express API on `http://localhost:3000` (inside your machine).
-2. Your **custom GPT** is configured with an **OpenAPI schema** that describes the API (search, policy check, checkout, etc.).
-3. The GPT uses **actions** (e.g. `searchProducts`, `checkPolicy`) that the OpenAI platform turns into HTTP requests to your Docker API.
-4. Each request includes `Authorization: Bearer <your-jwt>` so the backend can authenticate the GPT.
+| Category     | Endpoint                              | Method | Scope            |
+|-------------|---------------------------------------|--------|------------------|
+| **Payments** | `/api/v1/payments/execute`            | POST   | payments:write   |
+|              | `/api/v1/payments`                    | GET    | payments:read    |
+|              | `/api/v1/payments/:id`                | GET    | payments:read    |
+|              | `/api/v1/payments/:id/trace`          | GET    | payments:read    |
+|              | `/api/v1/payments/:id/verify`         | GET    | payments:read    |
+| **Policies** | `/api/v1/policies`                    | GET    | policies:read    |
+|              | `/api/v1/policies`                    | POST   | policies:write   |
+|              | `/api/v1/policies/:id`                | PUT    | policies:write   |
+|              | `/api/v1/policies/:id`                | DELETE | policies:write   |
+|              | `/api/v1/policies/check`              | POST   | policies:read    |
+| **Audit**    | `/api/v1/audit`                       | GET    | audit:read       |
+|              | `/api/v1/audit/stats`                 | GET    | audit:read       |
+|              | `/api/v1/audit/:id`                   | GET    | audit:read       |
+| **Treasury** | `/api/v1/treasury`                    | GET    | treasury:read    |
+|              | `/api/v1/treasury/ledger`             | GET    | treasury:read    |
+|              | `/api/v1/treasury/deposit`            | POST   | admin            |
+|              | `/api/v1/treasury/reconcile`          | GET    | admin            |
+| **Providers**| `/api/v1/providers`                   | GET    | providers:read   |
+|              | `/api/v1/providers/:id`               | GET    | providers:read   |
+| **Org**      | `/api/v1/orgs`                        | POST   | admin            |
+|              | `/api/v1/orgs/me`                     | GET    | (any)            |
+|              | `/api/v1/orgs/me`                     | PUT    | admin            |
+|              | `/api/v1/orgs/me/api-keys`            | GET    | admin            |
+|              | `/api/v1/orgs/me/api-keys`            | POST   | admin            |
+|              | `/api/v1/orgs/me/api-keys/:id`        | DELETE | admin            |
+|              | `/api/v1/orgs/me/api-keys/:id/rotate` | POST   | admin            |
+|              | `/api/v1/orgs/me/webhook-secret`      | GET    | admin            |
+|              | `/api/v1/orgs/me/webhook-secret/rotate` | POST | admin            |
+| **Health**   | `/api/v1/health`                      | GET    | (any)            |
 
-### Configure the GPT (end‑to‑end)
-
-1. Go to `https://chat.openai.com/gpts/editor`.
-2. Click **Create a GPT**.
-3. In **Actions → Import schema**, paste the OpenAPI YAML from [`docs/chatgpt-gpt-config.md`](./docs/chatgpt-gpt-config.md).
-4. In **Authentication**:
-   - **Type**: API Key / Bearer
-   - **Header name**: `Authorization`
-   - **Value format**: `Bearer <your-jwt-token>`
-   - Use the token you generated via `make generate-token USER=user-123` (or the quick‑start script).
-5. In the OpenAPI `servers` section, set:
-   - `url: http://localhost:3000` for local testing.
-   - If ChatGPT cannot reach `localhost` directly, expose your Docker API via a tunnel (e.g. ngrok) and use that HTTPS URL instead.
-6. Save the GPT and start chatting – when it needs to search products or check policies, it will issue HTTP calls to your Dockerized backend.
-
-### Test It!
-
-In your ChatGPT GPT, try:
-- "Find me a leather notebook under $50"
-- "What's my spending this month?"
-- "Show me handmade jewelry"
-- "Buy this notebook" (will trigger policy checks)
-
-### Troubleshooting
-
-**Docker not running?**
-```bash
-# Check Docker status
-docker info
-
-# Start Docker (Linux)
-sudo systemctl start docker
-
-# Or open Docker Desktop (Mac/Windows)
-```
-
-**Build fails with native module errors?**
-- Ensure Python 3, make, and g++ are installed
-- Try cleaning Docker build cache:
-  ```bash
-  docker system prune -a
-  docker compose build --no-cache
-  ```
-
-**Port already in use?**
-```bash
-# Change port in .env
-echo "PORT=3001" >> .env
-make restart
-```
-
-**Need help?**
-```bash
-make help              # Show all commands
-make dev-logs          # View logs
-./scripts/test-api.sh  # Test API endpoints
-```
-
-## 📁 Project Structure
+## Project Structure
 
 ```
 agentic-commerce/
-├── packages/
-│   ├── api/              # Express REST API
-│   ├── core/             # Business logic (Policy Service)
-│   ├── database/         # SQLite database layer
-│   ├── integrations/     # External APIs (Etsy, Stripe)
-│   └── shared/           # Shared types and utilities
-├── scripts/              # Utility scripts
-├── docs/                 # Documentation
-├── docker-compose.yml    # Production Docker setup
-├── docker-compose.dev.yml # Development Docker setup
-├── Dockerfile            # Production image
-├── Dockerfile.dev        # Development image
-└── Makefile             # Convenient commands
+  packages/
+    shared/        # Types, constants, structured logger
+    database/      # PostgreSQL access, migrations, seeds
+    core/          # PolicyService, AuditService, PaymentOrchestrator
+    integrations/  # Firecrawl, Zyte, Stripe, Solana, Base TX verifier
+    api/           # Express server, v1 routes, middleware, schemas
+    sdk/           # TypeScript client SDK
+  apps/
+    chat-ui/       # Chat demo UI
+    dashboard/     # Admin dashboard (React)
 ```
 
-## 🛠️ Development
+## Environment Variables
 
-### Available Commands
+See [.env.production.example](.env.production.example) for the full list.
 
-```bash
-make help              # Show all available commands
-make dev               # Start development server with hot reload
-make dev-logs          # View development logs
-make dev-shell         # Open shell in container
-make db-setup          # Setup database with default policies
-make generate-token    # Generate JWT token
-make status            # Show container status
-```
+Key variables:
 
-### Manual Commands
+| Variable              | Required | Description                            |
+|-----------------------|----------|----------------------------------------|
+| `DATABASE_URL`        | Yes      | PostgreSQL connection string           |
+| `JWT_SECRET`          | Yes      | Secret for JWT tokens                  |
+| `ALLOWED_ORIGINS`     | Prod     | Comma-separated CORS origins           |
+| `FIRECRAWL_API_KEY`   | Optional | Firecrawl provider API key             |
+| `ZYTE_API_KEY`        | Optional | Zyte provider API key                  |
+| `FIRECRAWL_AGENT_PRIVATE_KEY` | Optional | Base wallet key for agent payments |
+| `BASE_RPC_URL`        | Optional | Base network RPC endpoint              |
 
-```bash
-# Build images
-docker-compose build
+## License
 
-# Start in production mode
-docker-compose up -d
-
-# View logs
-docker-compose logs -f api
-
-# Stop containers
-docker-compose down
-
-# Clean everything
-docker-compose down -v --rmi all
-```
-
-### Local Development (without Docker)
-
-If you prefer to run locally:
-
-```bash
-# Install dependencies
-npm install
-
-# Build packages
-npm run build
-
-# Setup database
-npm run db:setup
-
-# Generate token
-npm run generate-token user-123
-
-# Start dev server
-npm run dev
-```
-
-## 🧪 Local Testing Guide
-
-### Quick Test: Health Check
-
-First, verify the API is running:
-
-```bash
-curl http://localhost:3000/health
-```
-
-Expected response:
-```json
-{
-  "status": "healthy",
-  "timestamp": "2024-01-10T12:00:00.000Z"
-}
-```
-
-### 1. Generate JWT Token
-
-```bash
-# Generate token (save this for testing)
-TOKEN=$(docker-compose exec api npm run generate-token user-123 | grep "Token:" | cut -d' ' -f2)
-
-# Or use make command
-make generate-token USER=user-123
-```
-
-### 2. Test API Endpoints with curl
-
-#### Test Product Search
-
-```bash
-curl -X POST http://localhost:3000/api/products/search \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "leather notebook",
-    "max_price": 50,
-    "limit": 10
-  }'
-```
-
-**Expected response:**
-```json
-{
-  "products": [
-    {
-      "id": "mock-1",
-      "title": "Handmade Leather Notebook - Brown",
-      "price": 35.99,
-      "merchant": "ArtisanLeatherCo",
-      "category": "Paper & Party Supplies"
-    }
-  ]
-}
-```
-
-#### Test Policy Check
-
-```bash
-curl -X POST http://localhost:3000/api/policy/check \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "user-123",
-    "product_id": "mock-1",
-    "price": 35.99,
-    "merchant": "ArtisanLeatherCo",
-    "category": "Paper & Party Supplies"
-  }'
-```
-
-**Expected response:**
-```json
-{
-  "allowed": true,
-  "message": "Purchase approved",
-  "policy_checks": [
-    {
-      "policy_name": "Monthly Budget",
-      "passed": true,
-      "current_spending": 0,
-      "limit": 1000
-    }
-  ]
-}
-```
-
-#### Test Spending Summary
-
-```bash
-curl -X POST http://localhost:3000/api/policy/spending \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "user-123"
-  }'
-```
-
-#### Test Checkout Flow
-
-```bash
-# 1. Initiate checkout
-CHECKOUT_RESPONSE=$(curl -s -X POST http://localhost:3000/api/checkout/initiate \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "user-123",
-    "product_id": "mock-1",
-    "product_name": "Leather Notebook",
-    "amount": 35.99,
-    "merchant": "ArtisanLeatherCo",
-    "category": "Paper & Party Supplies"
-  }')
-
-echo $CHECKOUT_RESPONSE
-
-# 2. Extract session ID
-SESSION_ID=$(echo $CHECKOUT_RESPONSE | jq -r '.checkout_session_id')
-
-# 3. Complete checkout
-curl -X POST http://localhost:3000/api/checkout/complete \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"session_id\": \"$SESSION_ID\",
-    \"user_id\": \"user-123\"
-  }"
-```
-
-### 3. Test Approval Workflow
-
-Test products that require manual approval (Office Supplies over $100):
-
-```bash
-# Try to buy Office Supplies over $100 (requires approval)
-curl -X POST http://localhost:3000/api/checkout/initiate \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "user-123",
-    "product_id": "approval-test-1",
-    "product_name": "Office Supplies Bundle",
-    "amount": 120.00,
-    "merchant": "OfficeSuppliesHub",
-    "category": "Office Supplies"
-  }'
-```
-
-**Expected response:**
-```json
-{
-  "requiresApproval": true,
-  "purchaseId": 1,
-  "status": "pending_approval",
-  "message": "Purchase recorded and pending manual approval"
-}
-```
-
-**Get pending approvals:**
-```bash
-curl -X GET "http://localhost:3000/api/approvals/pending?user_id=user-123" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-**Approve a purchase:**
-```bash
-curl -X POST http://localhost:3000/api/approvals/1/approve \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### 4. Test with ChatGPT Agent
-
-Once your custom GPT is configured:
-
-1. **Test Product Search:**
-   - "Find me a leather notebook under $50"
-   - "Show me handmade jewelry"
-
-2. **Test Policy Enforcement:**
-   - "What's my spending this month?"
-   - "Do I have budget left for a $200 purchase?"
-
-3. **Test Checkout:**
-   - "Buy this product: mock-1"
-   - Verify the GPT follows the checkout flow
-
-4. **Test Approvals:**
-   - Try buying "approval-test-1" (Office Supplies $120)
-   - GPT should inform you it needs approval
-
-5. **Monitor Backend:**
-   ```bash
-   # Watch logs in real-time
-   make dev-logs
-   
-   # Or with docker-compose
-   docker-compose logs -f api
-   ```
-
-### 5. Database Inspection
-
-View database contents:
-
-```bash
-# Open SQLite DB viewer (dev mode only)
-open http://localhost:8080
-
-# Or use SQLite CLI
-docker-compose exec api sqlite3 /app/data/shopping.db
-
-# View all policies
-sqlite> SELECT * FROM policies;
-
-# View purchase attempts
-sqlite> SELECT * FROM purchase_attempts ORDER BY created_at DESC LIMIT 10;
-
-# View users
-sqlite> SELECT * FROM users;
-```
-
-### 6. Local Development Testing Workflow
-
-```bash
-# 1. Start services
-make dev
-
-# 2. Check services are running
-make status
-
-# 3. Setup database (first time only)
-make db-setup
-
-# 4. Generate test token
-make generate-token USER=test-user
-
-# 5. Test health endpoint
-curl http://localhost:3000/health
-
-# 6. Test product search
-curl -X POST http://localhost:3000/api/products/search \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"leather","limit":5}'
-
-# 7. Watch logs while testing
-make dev-logs
-
-# 8. Make changes to code (hot reload enabled)
-
-# 9. Restart if needed
-make restart
-
-# 10. Clean up when done
-make down
-```
-
-### 7. Testing Checklist
-
-Before pushing changes, verify:
-
-- [ ] `curl http://localhost:3000/health` returns 200
-- [ ] Product search returns mock data
-- [ ] Policy check enforces limits correctly
-- [ ] Checkout flow completes successfully
-- [ ] Approval workflow works for purchases requiring approval
-- [ ] Docker logs show no errors
-- [ ] Database contains expected data
-- [ ] ChatGPT GPT can communicate with the API
-- [ ] JWT authentication works
-- [ ] CORS allows ChatGPT domains
-
-### 8. Performance Testing
-
-Test API response times:
-
-```bash
-# Install Apache Bench (if not installed)
-# Mac: brew install httpd
-# Ubuntu: sudo apt-get install apache2-utils
-
-# Test health endpoint (1000 requests, 10 concurrent)
-ab -n 1000 -c 10 http://localhost:3000/health
-
-# Test search endpoint with auth
-ab -n 100 -c 5 -T "application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -p search-payload.json \
-  http://localhost:3000/api/products/search
-```
-
-**Create `search-payload.json`:**
-```json
-{"query":"leather","limit":10}
-```
-
-### 9. Error Testing
-
-Test error handling:
-
-```bash
-# Test with invalid token
-curl -X POST http://localhost:3000/api/products/search \
-  -H "Authorization: Bearer invalid-token" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"test"}'
-# Expected: 401 Unauthorized
-
-# Test with missing required fields
-curl -X POST http://localhost:3000/api/policy/check \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"user_id":"test"}'
-# Expected: 400 Bad Request
-
-# Test with invalid price
-curl -X POST http://localhost:3000/api/policy/check \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"user_id":"test","product_id":"prod","price":-10,"merchant":"test"}'
-# Expected: 400 Bad Request or policy violation
-```
-
-### Common Testing Issues
-
-**Issue: "Connection refused"**
-```bash
-# Check if Docker is running
-docker ps
-
-# Check if API container is healthy
-docker-compose ps
-
-# Restart services
-make restart
-```
-
-**Issue: "401 Unauthorized"**
-```bash
-# Generate a fresh token
-make generate-token USER=test-user
-
-# Verify token format: Authorization: Bearer <token>
-```
-
-**Issue: "Database locked"**
-```bash
-# Stop all containers
-make down
-
-# Remove volumes
-docker-compose down -v
-
-# Restart and setup
-make dev
-make db-setup
-```
-
-**Issue: "Native module build errors"**
-```bash
-# Rebuild with no cache
-docker-compose build --no-cache
-
-# Verify build dependencies are installed
-docker-compose run api apk info | grep -E "(python|make|g++)"
-```
-
-## 🔧 Configuration
-
-### Environment Variables
-
-Edit `.env` file:
-
-```bash
-# Server
-PORT=3000
-NODE_ENV=development
-
-# Security
-JWT_SECRET=your-secret-key-change-in-production
-
-# Database
-DATABASE_URL=./data/shopping.db
-
-# CORS (for ChatGPT)
-ALLOWED_ORIGINS=https://chat.openai.com,https://chatgpt.com
-
-# Optional: Real Etsy API
-ETSY_API_KEY=your-etsy-api-key
-ETSY_SHOP_ID=your-shop-id
-
-# Optional: Stripe payments (default: mock mode)
-STRIPE_SECRET_KEY=sk_test_your-stripe-key
-USE_MOCK_PAYMENTS=true
-```
-
-### Default Policies
-
-The system comes with two default policies:
-
-1. **Office Supplies Auto-Approve**: Up to $100 automatically approved
-2. **Maximum Transaction Limit**: $500 per transaction (requires approval if exceeded)
-
-To modify policies, edit `packages/database/src/setup.ts` and run:
-
-```bash
-make db-setup
-```
-
-## 📊 Database Viewer
-
-Access the SQLite database viewer at http://localhost:8080 when running in dev mode.
-
-View and query:
-- `policies` - All configured policies
-- `purchase_attempts` - Purchase history and policy checks
-- `users` - User accounts
-- `user_policies` - Policy assignments
-
-## 🔒 Security
-
-- JWT tokens expire after 30 days
-- CORS restricted to ChatGPT domains
-- All endpoints require authentication
-- Policies are enforced server-side
-- Input validation on all endpoints
-
-**Production Checklist:**
-- [ ] Change `JWT_SECRET` in `.env`
-- [ ] Use HTTPS for production deployment
-- [ ] Update `ALLOWED_ORIGINS` with your domain
-- [ ] Set up proper database backups
-- [ ] Configure rate limiting
-- [ ] Enable logging and monitoring
-- [ ] Use real Stripe API key (not test key)
-
-## 🌐 Deployment
-
-### Deploy to Railway
-
-```bash
-# Install Railway CLI
-npm install -g @railway/cli
-
-# Login and deploy
-railway login
-railway init
-railway up
-```
-
-Update your ChatGPT GPT with the Railway URL.
-
-### Deploy to Render
-
-1. Connect your GitHub repo to Render
-2. Create a new Web Service
-3. Use Docker deployment
-4. Set environment variables
-5. Deploy!
-
-### Deploy to Fly.io
-
-```bash
-# Install flyctl
-curl -L https://fly.io/install.sh | sh
-
-# Launch app
-fly launch
-fly deploy
-```
-
-## 📖 API Documentation
-
-### Core Endpoints
-
-#### `POST /api/products/search`
-Search for products from Etsy (mock or real API)
-
-**Request:**
-```json
-{
-  "query": "leather notebook",
-  "max_price": 50,
-  "limit": 10,
-  "category": "Office Supplies"
-}
-```
-
-#### `POST /api/policy/check`
-Check if purchase is allowed by policies
-
-**Request:**
-```json
-{
-  "user_id": "user-123",
-  "product_id": "prod-456",
-  "price": 35.99,
-  "merchant": "ArtisanLeatherCo",
-  "category": "Paper & Party Supplies"
-}
-```
-
-#### `POST /api/policy/spending`
-Get spending summary (daily, weekly, monthly)
-
-#### `GET /api/purchases?user_id=user-123`
-Get purchase history
-
-#### `POST /api/checkout/initiate`
-Start checkout process
-
-#### `POST /api/checkout/complete`
-Complete purchase
-
-### Approval Management Endpoints
-
-#### `GET /api/approvals/pending?user_id=user-123`
-Get pending approvals for a user
-
-#### `POST /api/approvals/:id/approve`
-Approve a pending purchase
-
-#### `POST /api/approvals/:id/reject`
-Reject a pending purchase
-
-#### `GET /api/approvals/:id/status`
-Get approval status for a purchase
-
-### ACP-Compliant Endpoints
-
-#### `POST /checkout`
-ACP-compliant checkout endpoint
-
-#### `POST /delegate-payment`
-Delegate payment token between parties
-
-#### `GET /fulfillment/:orderId`
-Get order fulfillment status
-
-#### `POST /fulfillment`
-Update fulfillment status
-
-### Admin & Dashboard Endpoints
-
-- `GET /api/dashboard` - Comprehensive user dashboard
-- `GET /api/reports/spending` - Detailed spending report
-- `GET /api/invoices` - Invoice/receipt history
-- `GET /api/users` - List all users
-- `GET /api/policies` - List all policies
-- `GET /api/policy/compliance` - Policy compliance statistics
-
-See [API Reference](./docs/api-reference.md) for complete documentation.
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test with Docker
-5. Submit a pull request
-
-## 📝 License
-
-MIT License - see LICENSE file for details
-
-## 🆘 Troubleshooting
-
-### Port already in use
-```bash
-# Change PORT in .env or stop the conflicting service
-lsof -ti:3000 | xargs kill -9
-```
-
-### Database locked
-```bash
-# Stop containers and remove volumes
-make clean
-make dev
-make db-setup
-```
-
-### Token not working
-```bash
-# Generate a new token
-make generate-token USER=user-123
-# Update it in ChatGPT GPT settings
-```
-
-### Docker build fails
-```bash
-# Clean and rebuild
-docker-compose down -v
-docker system prune -a
-make build
-make dev
-```
-
-### Native module build errors
-```bash
-# Ensure build dependencies are installed
-# The Dockerfile already includes python3, make, g++
-
-# Try rebuilding with no cache
-docker-compose build --no-cache
-
-# Check logs for specific errors
-docker-compose logs api
-```
-
-## 📚 Additional Resources
-
-- [ChatGPT GPT Configuration Guide](./docs/chatgpt-gpt-config.md)
-- [Architecture Documentation](./docs/architecture.md)
-- [Policy Configuration](./docs/policies.md)
-- [API Reference](./docs/api-reference.md)
-- [Stripe Integration](./docs/stripe.md)
-- [Agentic Commerce Protocol (ACP)](./docs/acp.md)
-
-## 💡 What's Next?
-
-- [ ] Add real Etsy API integration
-- [ ] Implement full Stripe payment processing
-- [ ] Add webhook support for order updates
-- [ ] Create admin dashboard for policy management
-- [ ] Add multi-tenant support
-- [ ] Implement caching layer
-- [ ] Add comprehensive test suite
-- [ ] Set up CI/CD pipeline
-
-## ⭐ Support
-
-If you find this project helpful, please give it a star on GitHub!
-
----
-
-Built with ❤️ using TypeScript, Express, Stripe, and ChatGPT
+Private - All rights reserved.

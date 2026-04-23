@@ -16,3 +16,15 @@ export {
   sha256HexUtf8,
   validatePaymentProof,
 } from './x402-protocol';
+export { ProviderRegistry } from './provider-registry.js';
+export type { Provider, ProviderDispatchResult, ProviderPaymentConfig } from './provider-registry.js';
+export type { ProviderPriceQuote, PriceQuote } from '@agentic-commerce/shared';
+export { BaseTxVerifier } from './base-tx-verifier.js';
+export type { TxVerificationResult } from './base-tx-verifier.js';
+export { X402FacilitatorClient } from './x402-facilitator-client.js';
+export type {
+  X402PaymentRequirements,
+  VerifyResponse,
+  SettleResponse,
+  PaymentRequiredResponse,
+} from './x402-facilitator-client.js';

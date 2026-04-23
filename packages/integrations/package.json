@@ -10,10 +10,13 @@
   "dependencies": {
     "@agentic-commerce/database": "*",
     "@agentic-commerce/shared": "*",
+    "@coinbase/cdp-sdk": "^1.48.0",
+    "@coinbase/x402": "^2.1.0",
     "@solana/spl-token": "^0.3.11",
     "@solana/web3.js": "^1.98.4",
     "stripe": "^20.2.0",
     "viem": "^2.47.14",
+    "x402": "^1.1.0",
     "x402-fetch": "^1.1.0"
   },
   "devDependencies": {

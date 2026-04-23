@@ -1,19 +1,24 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import path from 'path';
 import { DB } from '@agentic-commerce/database';
-import { PolicyService } from '@agentic-commerce/core';
-import { EtsyClient, PaymentService, StripeAgentService, FacilitatorService, FirecrawlService, EscrowService, EscrowProgramClient, FirecrawlX402Agent, ZyteX402Agent } from '@agentic-commerce/integrations';
+import { PolicyService, PaymentOrchestrator } from '@agentic-commerce/core';
+import { EtsyClient, PaymentService, StripeAgentService, FacilitatorService, FirecrawlService, EscrowService, EscrowProgramClient, FirecrawlX402Agent, ZyteX402Agent, ProviderRegistry, BaseTxVerifier } from '@agentic-commerce/integrations';
 import { AuditService } from '@agentic-commerce/core';
 import { createAgentRoutes } from './agent-routes';
 import { createRegistryRoutes } from './registry-routes';
 import { createFacilitatorRoutes } from './facilitator-routes';
 import { createChatGPTAgentRoutes } from './chatgpt-agent-routes';
 import { createChatRoutes } from './chat-routes';
+import { createV1Router } from './v1-routes';
+import { createApiKeyAuth } from './middleware/api-key-auth';
+import { requestIdMiddleware, attachRequestId, globalErrorHandler } from './middleware/error-handler';
 
-// Extend Express Request type to include user
+// Extend Express Request type to include user and org context
 declare global {
   namespace Express {
     interface Request {
@@ -22,6 +27,7 @@ declare global {
         email?: string;
         iat?: number;
       };
+      org?: import('./middleware/api-key-auth').OrgContext;
     }
   }
 }
@@ -46,16 +52,51 @@ const escrowProgramClient = new EscrowProgramClient();
 const firecrawlX402Agent = new FirecrawlX402Agent();
 const zyteX402Agent = new ZyteX402Agent();
 const auditService = new AuditService();
+auditService.setDB(db);
 
-// Middleware - Allow all origins for ChatGPT and frontend
-app.use(cors({ 
-  origin: '*', // Allow all origins explicitly
-  credentials: false, // Set to false when using wildcard origin
-  exposedHeaders: ['ngrok-skip-browser-warning'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning', 'X-Requested-With']
+// Platform v1 services
+const providerRegistry = new ProviderRegistry(db);
+providerRegistry.setFirecrawlAgent(firecrawlX402Agent);
+providerRegistry.setZyteAgent(zyteX402Agent);
+const paymentOrchestrator = new PaymentOrchestrator(db, policyService, auditService, providerRegistry);
+const baseTxVerifier = new BaseTxVerifier();
+paymentOrchestrator.setBaseTxVerifier(baseTxVerifier);
+
+// ── Security Middleware Stack ──────────────────────────────────────────────
+
+app.use(helmet({
+  contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false,
+  crossOriginEmbedderPolicy: false,
 }));
-app.use(express.json());
+
+app.use(requestIdMiddleware);
+app.use(attachRequestId);
+
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  : null;
+
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production' && allowedOrigins
+    ? allowedOrigins
+    : '*',
+  credentials: allowedOrigins ? true : false,
+  exposedHeaders: ['ngrok-skip-browser-warning', 'X-Request-ID', 'PAYMENT-REQUIRED', 'PAYMENT-RESPONSE'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-Request-ID', 'PAYMENT-SIGNATURE', 'ngrok-skip-browser-warning', 'X-Requested-With'],
+}));
+
+const globalLimiter = rateLimit({
+  windowMs: 60_000,
+  max: parseInt(process.env.RATE_LIMIT_GLOBAL || '200', 10),
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { xForwardedForHeader: false },
+  message: { error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests, please try again later' } },
+});
+app.use('/api/', globalLimiter);
+
+app.use(express.json({ limit: '1mb' }));
 
 // Add ngrok bypass for all requests
 app.use((req, res, next) => {
@@ -86,8 +127,8 @@ const authenticate = (req: any, res: any, next: any) => {
     return res.status(200).end();
   }
   
-  // DEVELOPMENT MODE: Bypass JWT authentication if DISABLE_AUTH=true
-  if (process.env.DISABLE_AUTH === 'true') {
+  // DEVELOPMENT MODE: Bypass JWT authentication if DISABLE_AUTH=true (blocked in production)
+  if (process.env.DISABLE_AUTH === 'true' && process.env.NODE_ENV !== 'production') {
     console.log('⚠️  AUTHENTICATION DISABLED (Development Mode)');
     console.log('Path:', req.path, 'Method:', req.method);
     
@@ -231,23 +272,7 @@ app.get('/api/agent/status', async (req, res) => {
   });
 });
 
-// Debug endpoint - Check environment configuration
-app.get('/debug/env', (req, res) => {
-  res.json({
-    NODE_ENV: process.env.NODE_ENV,
-    DATABASE_URL: process.env.DATABASE_URL,
-    FRONTEND_URL: process.env.FRONTEND_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:3000',
-    API_URL: process.env.API_URL || '⚠️ NOT SET',
-    USE_MOCK_PAYMENTS: process.env.USE_MOCK_PAYMENTS || '⚠️ NOT SET',
-    STRIPE_KEY_SET: !!process.env.STRIPE_SECRET_KEY ? '✅ Yes' : '❌ No',
-    STRIPE_KEY_PREFIX: process.env.STRIPE_SECRET_KEY?.substring(0, 12) || 'NOT SET',
-    JWT_SECRET_SET: !!process.env.JWT_SECRET ? '✅ Yes' : '❌ No',
-    PORT: process.env.PORT,
-    platform: process.platform,
-    nodeVersion: process.version,
-    timestamp: new Date().toISOString()
-  });
-});
+// Debug endpoint removed for security — environment info must not be exposed
 
 // Admin endpoint - Clean up duplicate users
 app.post('/admin/cleanup-duplicate-users', async (req, res) => {
@@ -928,6 +953,25 @@ app.use('/api/facilitator', createFacilitatorRoutes(facilitatorService));
 
 // Mount ChatGPT agent routes (simplified agent-to-agent for ChatGPT)
 app.use('/api/chatgpt-agent', createChatGPTAgentRoutes(db, policyService, facilitatorService));
+
+// ── Platform API v1 (API-key authenticated) ─────────────────────────────────
+const apiKeyAuth = createApiKeyAuth(db);
+const v1Router = createV1Router({ db, policyService, auditService, paymentOrchestrator, providerRegistry });
+app.use('/api/v1', apiKeyAuth, v1Router);
+
+// ── MCP Server (Streamable HTTP transport with x402 pricing) ────────────────
+import { createMcpRouter } from '@agentic-commerce/mcp-server';
+const mcpRouter = createMcpRouter({
+  apiBaseUrl: `http://localhost:${PORT}/api/v1`,
+  defaultApiKey: process.env.MCP_DEFAULT_API_KEY || 'ak_demo_live_test_key_2024',
+});
+app.use('/mcp', mcpRouter);
+console.log(`[MCP] Server mounted at /mcp (Streamable HTTP transport with x402 pricing)`);
+
+// ── Demo Routes (EIP-3009 signer for presentation demo) ─────────────────────
+import { createDemoRoutes } from './demo-routes';
+app.use('/api/demo', createDemoRoutes());
+console.log(`[Demo] Routes mounted at /api/demo (sign-x402, wallet)`);
 
 // ============================================================================
 // Funding Subaccounts (treasury-style virtual balances)
@@ -1888,38 +1932,61 @@ app.post('/api/auth/create-user', async (req, res) => {
       console.error('⚠️  Failed to assign policies:', policyError.message);
     }
 
-    // Create Solana wallet for new users
-    let walletInfo = null;
+    // Create / restore multi-chain wallet for the user.
+    // Primary key: EVM (secp256k1) — used for x402 on Base / EVM networks.
+    // Also generates a Solana keypair so the user can later settle on Solana.
+    let walletInfo: {
+      evmAddress: string;
+      solanaPublicKey?: string;
+      networks: string[];
+    } | null = null;
     try {
       let walletData = await db.getUserWallet(user.id);
-      
+
       if (!walletData) {
-        // Import Solana dependencies
-        const { Keypair } = await import('@solana/web3.js');
-        
-        // Create new wallet for user
-        const keypair = Keypair.generate();
+        // EVM keypair via viem
+        const { generatePrivateKey, privateKeyToAccount } = await import('viem/accounts');
+        const evmPrivateKey = generatePrivateKey();
+        const evmAccount = privateKeyToAccount(evmPrivateKey);
+
+        // Solana keypair (for future Solana x402 settlement)
+        let solanaPublicKey: string | undefined;
+        let solanaSecretKey: number[] | undefined;
+        try {
+          const { Keypair } = await import('@solana/web3.js');
+          const solKeypair = Keypair.generate();
+          solanaPublicKey = solKeypair.publicKey.toBase58();
+          solanaSecretKey = Array.from(solKeypair.secretKey);
+        } catch {
+          // Solana optional — don't block on failure
+        }
+
         walletData = {
           userId: user.id,
-          publicKey: keypair.publicKey.toBase58(),
-          secretKey: Array.from(keypair.secretKey),
+          evmAddress: evmAccount.address,
+          evmPrivateKey,
+          solanaPublicKey,
+          solanaSecretKey,
         };
         await db.saveUserWallet(walletData);
-        console.log(`💼 Created Solana wallet for ${user.email}: ${walletData.publicKey}`);
-        
-        walletInfo = {
-          publicKey: walletData.publicKey,
-          network: process.env.SOLANA_CLUSTER || 'devnet',
-        };
+        console.log(`💼 Created EVM wallet for ${user.email}: ${evmAccount.address}${solanaPublicKey ? ` + Solana: ${solanaPublicKey}` : ''}`);
       } else {
-        console.log(`💼 Wallet already exists for ${user.email}`);
-        walletInfo = {
-          publicKey: walletData.publicKey,
-          network: process.env.SOLANA_CLUSTER || 'devnet',
-        };
+        console.log(`💼 Wallet already exists for ${user.email}: ${walletData.evmAddress}`);
       }
+
+      walletInfo = {
+        evmAddress: walletData.evmAddress,
+        solanaPublicKey: walletData.solanaPublicKey,
+        networks: [
+          'eip155:8453',   // Base
+          'eip155:1',      // Ethereum
+          'eip155:137',    // Polygon
+          'eip155:42161',  // Arbitrum
+          ...(walletData.solanaPublicKey ? ['solana:mainnet-beta'] : []),
+        ],
+      };
     } catch (walletError: any) {
-      console.error('⚠️  Failed to create wallet:', walletError.message);
+      console.error('⚠️  Failed to create wallet:', (walletError as Error).message);
       // Don't fail user creation if wallet creation fails
     }
 
@@ -3116,7 +3183,7 @@ app.get('/api/escrow/:id/on-chain', authenticate, async (req, res) => {
 app.get('/api/audit', authenticate, async (req, res) => {
   try {
     const { event_type, actor, resource, outcome, since, until, limit, offset, correlation_id } = req.query;
-    const result = auditService.query({
+    const result = await auditService.query({
       eventType: event_type as any,
       actor: actor as string,
       resource: resource as string,
@@ -3135,7 +3202,7 @@ app.get('/api/audit', authenticate, async (req, res) => {
 
 app.get('/api/audit/stats', authenticate, async (req, res) => {
   try {
-    const stats = auditService.getStats();
+    const stats = await auditService.getStats();
     res.json({ stats });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -3144,7 +3211,7 @@ app.get('/api/audit/stats', authenticate, async (req, res) => {
 
 app.get('/api/audit/trace/:correlationId', authenticate, async (req, res) => {
   try {
-    const trace = auditService.getTransactionTrace(req.params.correlationId);
+    const trace = await auditService.getTransactionTrace(req.params.correlationId);
     res.json({ correlationId: req.params.correlationId, trace, count: trace.length });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -3153,21 +3220,12 @@ app.get('/api/audit/trace/:correlationId', authenticate, async (req, res) => {
 
 app.get('/api/audit/:id', authenticate, async (req, res) => {
   try {
-    const entry = auditService.getEntry(req.params.id);
+    const entry = await auditService.getEntry(req.params.id);
     if (!entry) return res.status(404).json({ error: 'Audit entry not found' });
     res.json({ entry });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
-});
-
-// Bind to 0.0.0.0 for Docker/Render compatibility
-const HOST = '0.0.0.0';
-
-// Error handling for uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
-  process.exit(1);
 });
 
 // ============================================================================
@@ -3241,8 +3299,19 @@ setInterval(async () => {
   }
 }, TWENTY_FOUR_HOURS);
 
+// Global error handler — must be after ALL route registrations
+app.use(globalErrorHandler);
+
+// Bind to 0.0.0.0 for Docker/Render compatibility
+const HOST = '0.0.0.0';
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  process.exit(1);
+});
+
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
   process.exit(1);
 });
 
@@ -3253,6 +3322,7 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`✓ Stripe: ${process.env.STRIPE_SECRET_KEY ? 'Configured ✓' : 'Mock mode (add STRIPE_SECRET_KEY to .env)'}`);
   console.log(`✓ Etsy API: ${process.env.ETSY_API_KEY ? 'Configured ✓' : 'Mock mode (add ETSY_API_KEY to .env)'}`);
   console.log(`✓ Database: ${process.env.DATABASE_URL || './data/shopping.db'}`);
+  console.log(`✓ Platform API v1: http://localhost:${PORT}/api/v1/health`);
   console.log(`✓ Server ready to accept connections`);
 });
 

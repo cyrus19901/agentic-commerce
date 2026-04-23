@@ -1,5 +1,53 @@
 import { Pool, PoolClient } from 'pg';
+import { randomBytes, createCipheriv, createDecipheriv } from 'crypto';
 import { Policy } from '@agentic-commerce/shared';
+
+// ── Wallet crypto helpers ─────────────────────────────────────────────────────
+
+function getWalletKey(): Buffer {
+  const hex = process.env.WALLET_ENCRYPTION_KEY ?? '';
+  if (hex.length !== 64) {
+    throw new Error('WALLET_ENCRYPTION_KEY must be set to 32 bytes (64 hex chars)');
+  }
+  return Buffer.from(hex, 'hex');
+}
+
+/** AES-256-GCM encrypt. Output: "gcm:<base64(iv|tag|ciphertext)>" */
+function encryptWallet(plaintext: string): string {
+  const key = getWalletKey();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return 'gcm:' + Buffer.concat([iv, tag, encrypted]).toString('base64');
+}
+
+/** Decrypt. Falls back to raw base64→utf8 for legacy Solana rows. */
+function decryptWallet(stored: string): string {
+  if (!stored.startsWith('gcm:')) {
+    return Buffer.from(stored, 'base64').toString('utf-8');
+  }
+  const key = getWalletKey();
+  const buf = Buffer.from(stored.slice(4), 'base64');
+  const iv  = buf.subarray(0, 12);
+  const tag = buf.subarray(12, 28);
+  const enc = buf.subarray(28);
+  const decipher = createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  return decipher.update(enc).toString('utf8') + decipher.final('utf8');
+}
+
+// ── Wallet record type ────────────────────────────────────────────────────────
+
+export interface UserWalletRecord {
+  userId: string;
+  /** Primary EVM address (hex, checksum) — used for x402 on Base / EVM chains */
+  evmAddress: string;
+  evmPrivateKey: string;  // 0x-prefixed hex
+  /** Optional Solana keypair preserved for backwards-compat / future use */
+  solanaPublicKey?: string;
+  solanaSecretKey?: number[];
+}
 
 // Convert SQLite-style `?` placeholders to PostgreSQL `$1, $2, ...`
 function toPg(sql: string): string {
@@ -54,9 +102,26 @@ export class DB {
     return rows.map(mapPolicy);
   }
 
+  async getActivePoliciesByOrg(orgId: string): Promise<Policy[]> {
+    const rows = await this.all(
+      'SELECT * FROM policies WHERE enabled = true AND org_id = ? ORDER BY priority DESC',
+      [orgId],
+    );
+    if (rows.length > 0) return rows.map(mapPolicy);
+    return this.getActivePolicies();
+  }
+
   async getAllPolicies(): Promise<Policy[]> {
     const rows = await this.all(
       'SELECT * FROM policies ORDER BY priority DESC, created_at DESC'
+    );
+    return rows.map(mapPolicy);
+  }
+
+  async getPoliciesByOrg(orgId: string): Promise<Policy[]> {
+    const rows = await this.all(
+      'SELECT * FROM policies WHERE org_id = ? ORDER BY priority DESC, created_at DESC',
+      [orgId],
     );
     return rows.map(mapPolicy);
   }
@@ -66,17 +131,18 @@ export class DB {
     return row ? mapPolicy(row) : null;
   }
 
-  async createPolicy(policy: Policy): Promise<void> {
+  async createPolicy(policy: Policy, orgId?: string): Promise<void> {
     const now = new Date();
     const transactionTypes = policy.conditions?.transactionType || ['agent-to-merchant'];
     await this.run(
-      `INSERT INTO policies (id, name, type, enabled, priority, transaction_types, conditions, rules, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO policies (id, name, type, enabled, priority, transaction_types, conditions, rules, org_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         policy.id, policy.name, policy.type, policy.enabled, policy.priority,
         JSON.stringify(transactionTypes),
       JSON.stringify(policy.conditions),
       JSON.stringify(policy.rules),
+        orgId ?? null,
         now, now,
       ]
     );
@@ -614,22 +680,49 @@ export class DB {
 
   // ── User Wallets ──────────────────────────────────────────────────────────────
 
-  async getUserWallet(userId: string): Promise<{ userId: string; publicKey: string; secretKey: number[] } | null> {
+  async getUserWallet(userId: string): Promise<UserWalletRecord | null> {
     const row = await this.one('SELECT * FROM user_wallets WHERE user_id = ?', [userId]);
     if (!row) return null;
-    return {
-      userId: row.user_id,
-      publicKey: row.public_key,
-      secretKey: JSON.parse(Buffer.from(row.encrypted_secret, 'base64').toString('utf-8')),
-    };
+
+    try {
+      const plaintext = decryptWallet(row.encrypted_secret);
+      const parsed = JSON.parse(plaintext);
+
+      if (parsed.version === 2) {
+        return {
+          userId: row.user_id,
+          evmAddress: parsed.evm.address,
+          evmPrivateKey: parsed.evm.privateKey,
+          solanaPublicKey: parsed.solana?.publicKey,
+          solanaSecretKey: parsed.solana?.secretKey,
+        };
+      }
+
+      // Legacy row: plaintext was a raw secretKey number[] (Solana, no EVM).
+      // Return null so the caller regenerates with an EVM wallet.
+      return null;
+    } catch {
+      return null;
+    }
   }
 
-  async saveUserWallet(wallet: { userId: string; publicKey: string; secretKey: number[] }): Promise<void> {
-    const encryptedSecret = Buffer.from(JSON.stringify(wallet.secretKey)).toString('base64');
+  async saveUserWallet(wallet: UserWalletRecord): Promise<void> {
+    const payload = JSON.stringify({
+      version: 2,
+      evm: { address: wallet.evmAddress, privateKey: wallet.evmPrivateKey },
+      ...(wallet.solanaPublicKey
+        ? { solana: { publicKey: wallet.solanaPublicKey, secretKey: wallet.solanaSecretKey } }
+        : {}),
+    });
+    const encryptedSecret = encryptWallet(payload);
     const id = `wallet_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     await this.run(
-      'INSERT INTO user_wallets (id, user_id, public_key, encrypted_secret, created_at) VALUES (?, ?, ?, ?, ?)',
-      [id, wallet.userId, wallet.publicKey, encryptedSecret, new Date()]
+      `INSERT INTO user_wallets (id, user_id, public_key, encrypted_secret, created_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (user_id) DO UPDATE
+         SET public_key = EXCLUDED.public_key,
+             encrypted_secret = EXCLUDED.encrypted_secret`,
+      [id, wallet.userId, wallet.evmAddress, encryptedSecret, new Date()],
     );
   }
 

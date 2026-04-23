@@ -4,6 +4,51 @@ import { Policy, PolicyCheckResult, PurchaseRequest } from '@agentic-commerce/sh
 export class PolicyService {
   constructor(private db: DB) {}
 
+  async checkPolicyOnlyForOrg(orgId: string, request: PurchaseRequest): Promise<PolicyCheckResult> {
+    const policies = await this.db.getActivePoliciesByOrg(orgId);
+    const matchedPolicies: PolicyCheckResult['matchedPolicies'] = [];
+    let allowed = true;
+    let reason: string | undefined;
+    let requiresApproval = false;
+    let flaggedForReview = false;
+    const transactionType = request.transactionType || 'agent-to-merchant';
+
+    if (policies.length === 0) {
+      return { allowed: false, reason: 'No policies configured for this organization', matchedPolicies: [] };
+    }
+
+    const applicablePolicies = policies.filter(policy => {
+      if (!policy.transactionTypes || policy.transactionTypes.length === 0) return true;
+      return policy.transactionTypes.includes(transactionType) || policy.transactionTypes.includes('all');
+    });
+
+    if (applicablePolicies.length === 0) {
+      return { allowed: false, reason: `No policies configured for ${transactionType} transactions`, matchedPolicies: [] };
+    }
+
+    for (const policy of applicablePolicies) {
+      const result = await this.checkPolicy(policy, request, transactionType);
+      matchedPolicies.push({ id: policy.id, name: policy.name, passed: result.passed, reason: result.reason });
+      if (!result.passed) {
+        allowed = false;
+        reason = result.reason;
+        if ((result as any).requiresApproval) requiresApproval = true;
+        if ((result as any).flaggedForReview) flaggedForReview = true;
+        if (!(result as any).requiresApproval && !(result as any).flaggedForReview) break;
+      } else if ((result as any).flaggedForReview) {
+        flaggedForReview = true;
+      }
+    }
+
+    return {
+      allowed,
+      reason,
+      requiresApproval: requiresApproval || undefined,
+      flaggedForReview: flaggedForReview || undefined,
+      matchedPolicies,
+    };
+  }
+
   /**
    * READ-ONLY policy check (does NOT record attempt)
    * Use this for preliminary checks before actual purchase

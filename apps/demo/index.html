@@ -1,0 +1,1415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gordon — Agentic Payments Demo</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@400;500;600;700;800&display=swap');
+    :root {
+      --bg: #06060c;
+      --surface: #0c0c18;
+      --surface-2: #111124;
+      --surface-3: #18183a;
+      --border: #1e1e44;
+      --text: #eaeaff;
+      --text-muted: #8080bb;
+      --text-dim: #5050aa;
+      --cyan: #00e5ff;
+      --blue: #635bff;
+      --purple: #b07aff;
+      --green: #1af0a0;
+      --red: #ff5e6c;
+      --orange: #ffaa44;
+      --yellow: #ffe566;
+      --cyan-glow: rgba(0,229,255,0.12);
+      --blue-glow: rgba(99,91,255,0.15);
+      --green-glow: rgba(26,240,160,0.10);
+      --red-glow: rgba(255,94,108,0.10);
+      --mono: 'Space Mono', monospace;
+      --sans: 'DM Sans', sans-serif;
+    }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html { font-size: 15px; }
+    body { font-family: var(--sans); background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+    a { color: var(--cyan); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+
+    .mesh { position:fixed; border-radius:50%; filter:blur(160px); pointer-events:none; z-index:0; opacity:0.6; }
+    .m1 { top:-25%; left:-15%; width:700px; height:700px; background:rgba(99,91,255,0.08); }
+    .m2 { bottom:-30%; right:-10%; width:600px; height:600px; background:rgba(0,229,255,0.05); }
+    .m3 { top:30%; left:50%; width:400px; height:400px; background:rgba(176,122,255,0.04); }
+
+    .wrap { position:relative; z-index:1; max-width:1600px; margin:0 auto; }
+
+    .topbar { display:flex; align-items:center; justify-content:space-between; padding:16px 32px; border-bottom:1px solid var(--border); backdrop-filter:blur(20px); background:rgba(6,6,12,0.85); position:sticky; top:0; z-index:100; }
+    .brand { display:flex; align-items:center; gap:12px; }
+    .brand-mark { width:38px; height:38px; border-radius:12px; background:linear-gradient(135deg,var(--blue),var(--cyan)); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:18px; color:#000; }
+    .brand h1 { font-size:20px; font-weight:700; letter-spacing:-0.5px; }
+    .brand h1 span { color:var(--text-dim); font-weight:400; font-size:13px; margin-left:10px; }
+    .topbar-r { display:flex; align-items:center; gap:10px; }
+    .pill { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:1.2px; padding:5px 12px; border-radius:100px; }
+    .pill-c { background:var(--cyan-glow); color:var(--cyan); border:1px solid rgba(0,229,255,0.2); }
+    .pill-b { background:var(--blue-glow); color:var(--blue); border:1px solid rgba(99,91,255,0.3); }
+    .pill-g { background:var(--green-glow); color:var(--green); border:1px solid rgba(26,240,160,0.2); }
+    .api-inp { background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:7px 14px; color:var(--text); font-family:var(--mono); font-size:10px; width:240px; }
+    .api-inp:focus { outline:none; border-color:var(--cyan); box-shadow:0 0 0 3px var(--cyan-glow); }
+
+    .hero { text-align:center; padding:48px 32px 32px; }
+    .hero h2 { font-size:36px; font-weight:800; letter-spacing:-1px; background:linear-gradient(135deg,var(--cyan),var(--blue),var(--purple)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+    .hero p { color:var(--text-muted); margin-top:10px; font-size:16px; max-width:700px; margin-left:auto; margin-right:auto; line-height:1.6; }
+
+    .lanes { display:grid; grid-template-columns:1fr 1fr; gap:24px; padding:0 32px 40px; }
+    @media(max-width:1100px) { .lanes { grid-template-columns:1fr; } }
+    .market { margin:0 32px 24px; background:var(--surface); border:1px solid var(--border); border-radius:20px; overflow:hidden; }
+    .market-head { padding:18px 22px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+    .market-head h3 { font-size:17px; }
+    .market-controls { display:flex; gap:8px; width:100%; }
+    .market-controls input, .market-controls select { background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:10px 12px; color:var(--text); }
+    .market-controls input { flex:1; }
+    .market-grid { padding:16px 22px 22px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    @media(max-width:1200px) { .market-grid { grid-template-columns:1fr; } }
+    .svc-card { background:var(--surface-2); border:1px solid var(--border); border-radius:12px; padding:12px; }
+    .svc-title { display:flex; align-items:center; gap:8px; justify-content:space-between; margin-bottom:6px; }
+    .svc-title strong { font-size:13px; }
+    .svc-meta { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; }
+    .svc-meta span { font-size:10px; font-family:var(--mono); color:var(--text-muted); border:1px solid var(--border); border-radius:6px; padding:2px 6px; }
+    .svc-desc { font-size:12px; color:var(--text-muted); line-height:1.4; margin-bottom:10px; min-height:32px; }
+    .svc-actions { display:flex; gap:8px; }
+    .btn-mini { border:none; border-radius:8px; padding:7px 10px; font-size:11px; font-weight:700; cursor:pointer; }
+    .btn-probe { background:var(--blue-glow); color:var(--blue); }
+    .btn-reg { background:var(--green-glow); color:var(--green); }
+    .probe-box { margin-top:8px; background:var(--surface-3); border:1px solid var(--border); border-radius:8px; padding:8px; font-size:11px; font-family:var(--mono); }
+
+    .lane { background:var(--surface); border:1px solid var(--border); border-radius:20px; overflow:hidden; display:flex; flex-direction:column; }
+    .lane-head { padding:20px 24px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+    .lane-head h3 { font-size:18px; font-weight:700; }
+    .lane-badge { font-size:10px; font-weight:700; padding:4px 12px; border-radius:100px; }
+    .lane-mcp .lane-badge { background:rgba(176,122,255,0.12); color:var(--purple); border:1px solid rgba(176,122,255,0.3); }
+    .lane-a2a .lane-badge { background:var(--cyan-glow); color:var(--cyan); border:1px solid rgba(0,229,255,0.3); }
+
+    .lane-body { padding:20px 24px; flex:1; }
+
+    .input-row { display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
+    .input-row input, .input-row select { flex:1; background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:10px 14px; color:var(--text); font-size:13px; font-family:var(--sans); min-width:0; }
+    .input-row input:focus, .input-row select:focus { outline:none; border-color:var(--cyan); }
+    .input-row select { appearance:none; cursor:pointer; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 5l3 3 3-3' stroke='%238080bb' fill='none' stroke-width='1.5'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 12px center; padding-right:32px; }
+    .btn { border:none; border-radius:10px; padding:12px 24px; font-size:13px; font-weight:700; cursor:pointer; font-family:var(--sans); transition:all 0.2s; white-space:nowrap; }
+    .btn:disabled { opacity:0.3; cursor:not-allowed; }
+    .btn-mcp { background:linear-gradient(135deg,var(--purple),var(--blue)); color:#fff; }
+    .btn-a2a { background:linear-gradient(135deg,var(--blue),var(--cyan)); color:#000; }
+    .btn:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 6px 24px rgba(0,0,0,0.4); }
+
+    .price-bar { display:none; padding:10px 14px; background:var(--surface-3); border:1px solid var(--border); border-radius:10px; margin-bottom:14px; font-size:12px; }
+    .price-bar.show { display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+    .price-bar .pb-src { font-size:9px; font-weight:700; padding:2px 8px; border-radius:4px; text-transform:uppercase; letter-spacing:0.5px; }
+    .pb-src-probe { background:var(--green-glow); color:var(--green); }
+    .pb-src-fallback { background:rgba(255,170,68,0.12); color:var(--orange); }
+    .price-bar .pb-item { display:flex; align-items:baseline; gap:4px; }
+    .price-bar .pb-label { color:var(--text-dim); font-size:11px; }
+    .price-bar .pb-val { font-family:var(--mono); font-weight:700; }
+    .price-bar .pb-total { color:var(--green); }
+    .price-bar .pb-sep { color:var(--text-dim); opacity:0.4; }
+
+    .network-bar { display:none; padding:10px 14px; background:var(--surface-2); border:1px solid var(--border); border-radius:10px; margin-bottom:14px; }
+    .network-bar.show { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+    .network-bar label { font-size:11px; color:var(--text-muted); font-weight:600; }
+    .network-bar .net-opt { display:inline-flex; align-items:center; gap:6px; padding:5px 12px; border-radius:8px; border:1px solid var(--border); cursor:pointer; font-size:11px; font-family:var(--mono); transition:all .15s; background:var(--surface-3); }
+    .network-bar .net-opt:hover { border-color:var(--cyan); }
+    .network-bar .net-opt.selected { border-color:var(--cyan); background:var(--cyan-glow); color:var(--cyan); }
+
+    .log { background:var(--bg); border:1px solid var(--border); border-radius:14px; padding:0; margin-top:14px; max-height:500px; overflow-y:auto; font-family:var(--mono); font-size:11px; line-height:1.7; }
+    .log::-webkit-scrollbar { width:6px; }
+    .log::-webkit-scrollbar-track { background:var(--bg); }
+    .log::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+    .log-entry { padding:6px 14px; border-bottom:1px solid rgba(30,30,68,0.4); display:flex; gap:10px; align-items:flex-start; }
+    .log-entry:last-child { border-bottom:none; }
+    .log-entry .ts { color:var(--text-dim); flex-shrink:0; font-size:10px; min-width:60px; }
+    .log-entry .tag { flex-shrink:0; font-size:9px; font-weight:700; padding:1px 8px; border-radius:4px; text-transform:uppercase; letter-spacing:0.5px; }
+    .tag-req { background:rgba(99,91,255,0.15); color:var(--blue); }
+    .tag-402 { background:rgba(255,170,68,0.12); color:var(--orange); }
+    .tag-sign { background:rgba(176,122,255,0.12); color:var(--purple); }
+    .tag-ok { background:var(--green-glow); color:var(--green); }
+    .tag-err { background:var(--red-glow); color:var(--red); }
+    .tag-info { background:rgba(128,128,187,0.1); color:var(--text-muted); }
+    .tag-settle { background:var(--cyan-glow); color:var(--cyan); }
+    .tag-mcp { background:rgba(176,122,255,0.12); color:var(--purple); }
+    .log-entry .msg { flex:1; word-break:break-all; color:var(--text); }
+    .log-entry .msg code { font-family:var(--mono); background:var(--surface-2); padding:0 4px; border-radius:3px; font-size:10px; }
+    .log-entry .msg .dim { color:var(--text-dim); }
+    .log-entry .msg a { color:var(--cyan); }
+    .log-empty { padding:32px; text-align:center; color:var(--text-dim); font-size:12px; }
+
+    .result-card { margin-top:14px; background:var(--surface-2); border:1px solid var(--border); border-radius:14px; padding:16px; display:none; }
+    .result-card.show { display:block; }
+    .result-card h4 { font-size:11px; font-weight:600; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; }
+    .result-kv { display:grid; grid-template-columns:140px 1fr; gap:4px 12px; font-size:12px; }
+    .result-kv dt { color:var(--text-dim); font-weight:500; font-size:11px; }
+    .result-kv dd { font-family:var(--mono); font-size:10px; word-break:break-all; margin:0; }
+
+    /* Service Result Display */
+    .sr-container { background:var(--surface-3); border:1px solid var(--border); border-radius:12px; overflow:hidden; margin-bottom:12px; }
+    .sr-toolbar { display:flex; align-items:center; gap:8px; padding:8px 14px; border-bottom:1px solid var(--border); background:var(--surface-2); }
+    .sr-toolbar .sr-type { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.8px; padding:2px 8px; border-radius:4px; }
+    .sr-type-html { background:rgba(255,94,108,0.1); color:var(--red); }
+    .sr-type-json { background:rgba(0,229,255,0.1); color:var(--cyan); }
+    .sr-type-md { background:rgba(176,122,255,0.1); color:var(--purple); }
+    .sr-type-text { background:rgba(128,128,187,0.1); color:var(--text-muted); }
+    .sr-toolbar .sr-url { font-size:10px; font-family:var(--mono); color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+    .sr-toolbar .sr-info { font-size:10px; color:var(--text-dim); flex-shrink:0; }
+    .sr-toggle-btns { display:flex; gap:0; margin-left:auto; flex-shrink:0; }
+    .sr-toggle-btns button { background:var(--surface-3); border:1px solid var(--border); color:var(--text-muted); font-size:10px; font-family:var(--sans); padding:4px 10px; cursor:pointer; transition:all .15s; }
+    .sr-toggle-btns button:first-child { border-radius:4px 0 0 4px; }
+    .sr-toggle-btns button:last-child { border-radius:0 4px 4px 0; }
+    .sr-toggle-btns button.active { background:var(--blue-glow); border-color:var(--blue); color:var(--blue); }
+    .sr-summary-card { padding:12px 14px; background:var(--surface-2); border-bottom:1px solid var(--border); font-size:12px; }
+    .sr-summary-card .sr-summ-kv { display:grid; grid-template-columns:auto 1fr; gap:2px 12px; }
+    .sr-summary-card .sr-summ-kv dt { color:var(--text-dim); font-size:11px; font-weight:600; }
+    .sr-summary-card .sr-summ-kv dd { font-family:var(--mono); font-size:11px; margin:0; }
+    .sr-body-rendered { padding:0; min-height:200px; max-height:400px; overflow:auto; }
+    .sr-body-rendered iframe { width:100%; height:350px; border:0; background:#fff; }
+    .sr-body-rendered .sr-json { padding:14px; font-family:var(--mono); font-size:11px; line-height:1.6; white-space:pre-wrap; word-break:break-word; max-height:400px; overflow:auto; }
+    .sr-body-rendered .sr-md { padding:14px 18px; font-size:13px; line-height:1.8; color:var(--text); }
+    .sr-body-rendered .sr-md h1, .sr-body-rendered .sr-md h2, .sr-body-rendered .sr-md h3 { margin-top:16px; margin-bottom:8px; }
+    .sr-body-rendered .sr-md a { color:var(--cyan); }
+    .sr-body-rendered .sr-md code { background:var(--surface-2); padding:1px 4px; border-radius:3px; font-size:12px; }
+    .sr-body-source { display:none; padding:14px; font-family:var(--mono); font-size:10px; line-height:1.6; white-space:pre-wrap; word-break:break-word; max-height:400px; overflow:auto; color:var(--text-muted); }
+    .j-key { color:#ff79c6; }
+    .j-str { color:#f1fa8c; }
+    .j-num { color:#bd93f9; }
+    .j-bool { color:#ff5555; }
+    .j-null { color:#6272a4; }
+
+    .info-bar { display:flex; gap:16px; padding:16px 32px; flex-wrap:wrap; margin-top:4px; }
+    .info-chip { display:flex; align-items:center; gap:8px; font-size:11px; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:8px 14px; }
+    .info-chip .dot { width:8px; height:8px; border-radius:50%; }
+    .dot-green { background:var(--green); box-shadow:0 0 8px var(--green-glow); }
+    .dot-blue { background:var(--blue); }
+    .info-chip .lbl { color:var(--text-dim); }
+    .info-chip .val { font-family:var(--mono); font-size:10px; }
+
+    .ops-panels { display:grid; grid-template-columns:1fr 1fr; gap:16px; padding:0 32px 20px; }
+    @media(max-width:1100px) { .ops-panels { grid-template-columns:1fr; } }
+    .ops-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; overflow:hidden; }
+    .ops-head { padding:12px 14px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .ops-head h4 { font-size:12px; letter-spacing:0.3px; }
+    .ops-actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .ops-btn { border:1px solid var(--border); background:var(--surface-2); color:var(--text); border-radius:8px; padding:6px 10px; font-size:10px; cursor:pointer; }
+    .ops-btn:hover { border-color:var(--cyan); color:var(--cyan); }
+    .ops-body { padding:12px 14px; font-size:12px; }
+    .ops-kv { display:grid; grid-template-columns:150px 1fr; gap:4px 10px; margin-bottom:10px; }
+    .ops-kv .k { color:var(--text-dim); font-size:11px; }
+    .ops-kv .v { font-family:var(--mono); font-size:11px; word-break:break-word; }
+    .ops-list { max-height:120px; overflow:auto; border:1px solid var(--border); border-radius:8px; padding:8px; background:var(--surface-2); font-family:var(--mono); font-size:10px; line-height:1.5; color:var(--text-muted); }
+    .ops-list div { margin-bottom:4px; }
+
+    .bottom { padding:0 32px 40px; }
+    .arch-card { background:var(--surface); border:1px solid var(--border); border-radius:20px; padding:28px 32px; }
+    .arch-card h3 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:2px; color:var(--text-dim); margin-bottom:20px; }
+    .arch-grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; }
+    @media(max-width:900px) { .arch-grid { grid-template-columns:1fr; } }
+    .arch-lane { padding:16px; background:var(--surface-2); border-radius:14px; border:1px solid var(--border); }
+    .arch-lane h4 { font-size:12px; font-weight:700; margin-bottom:12px; }
+    .arch-lane.mcp h4 { color:var(--purple); }
+    .arch-lane.a2a h4 { color:var(--cyan); }
+    .arch-flow { display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-size:10px; font-family:var(--mono); }
+    .arch-n { background:var(--surface-3); border:1px solid var(--border); border-radius:6px; padding:5px 10px; font-weight:500; }
+    .arch-a { color:var(--text-dim); font-size:12px; }
+    .converge { text-align:center; padding:14px; font-size:11px; color:var(--text-muted); font-family:var(--mono); border-top:1px solid var(--border); margin-top:20px; padding-top:20px; }
+    .converge strong { color:var(--text); }
+
+    @keyframes slideIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+    .log-entry { animation:slideIn 0.25s ease; }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+    .pulsing { animation:pulse 1.5s infinite; }
+  </style>
+</head>
+<body>
+
+<div class="mesh m1"></div>
+<div class="mesh m2"></div>
+<div class="mesh m3"></div>
+
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">G</div>
+      <h1>Gordon<span>Agentic Payments Platform</span></h1>
+    </div>
+    <div class="topbar-r">
+      <span class="pill pill-c">X402 Protocol</span>
+      <span class="pill pill-b">Multi-Chain USDC</span>
+      <span class="pill pill-g">Live On-Chain</span>
+      <input class="api-inp" id="apiKey" type="text" placeholder="API Key">
+      <button class="ops-btn" onclick="logoutBuyer()">Logout</button>
+    </div>
+  </div>
+
+  <div class="hero">
+    <h2>MCP Payments vs Agent-to-Agent Payments</h2>
+    <p>Two ways agents pay for services through Gordon — real USDC settlement via Coinbase's X402 facilitator on your chosen network</p>
+  </div>
+
+  <div class="info-bar">
+    <div class="info-chip"><div class="dot dot-green"></div><span class="lbl">Policy Engine</span><span class="val" style="color:var(--green)">Active</span></div>
+    <div class="info-chip"><div class="dot dot-blue"></div><span class="lbl">Treasury</span><span class="val" id="treasuryBal">Loading...</span></div>
+    <div class="info-chip"><div class="dot dot-green"></div><span class="lbl">Facilitator</span><span class="val">Coinbase CDP</span></div>
+    <div class="info-chip"><div class="dot dot-blue"></div><span class="lbl">Buyer Wallet</span><span class="val" id="buyerAddr">Loading...</span></div>
+    <div class="info-chip"><div class="dot dot-green"></div><span class="lbl">USDC Balance</span><span class="val" id="buyerBal">—</span></div>
+  </div>
+
+  <div class="ops-panels">
+    <div class="ops-card" style="grid-column:1/-1">
+      <div class="ops-head">
+        <h4>Buyer Onboarding (Platform-first)</h4>
+        <div class="ops-actions">
+          <button class="ops-btn" onclick="loadBuyerOnboarding()">Refresh</button>
+        </div>
+      </div>
+      <div class="ops-body">
+        <div class="ops-kv" id="buyerOnboardKv"></div>
+        <div class="input-row" style="margin-bottom:8px">
+          <select id="walletMode" onchange="updateWalletMode()">
+            <option value="managed">Use Gordon Managed Wallet</option>
+            <option value="external">Connect External Wallet (demo)</option>
+          </select>
+          <input id="externalWallet" type="text" placeholder="0x... wallet address (demo)">
+          <button class="btn btn-a2a" style="padding:10px 14px" onclick="saveExternalWallet()">Save Wallet</button>
+        </div>
+        <div class="input-row" style="margin-bottom:8px">
+          <button class="btn btn-mcp" style="padding:10px 14px" onclick="createBuyerApiKey()">Issue Buyer API Key</button>
+          <input id="latestBuyerKey" type="text" placeholder="Latest issued key appears here" readonly>
+        </div>
+        <div class="ops-list" id="buyerApiKeys">Loading API keys...</div>
+        <div class="input-row" style="margin-top:10px;margin-bottom:8px">
+          <input id="policyNameInput" type="text" value="Demo Buyer Tx Cap" placeholder="Policy name">
+          <input id="policyCapInput" type="number" min="0.001" step="0.001" value="0.05" placeholder="Max Tx Amount (USDC)">
+          <button class="btn btn-a2a" style="padding:10px 14px" onclick="createQuickBuyerPolicy()">Add Policy</button>
+        </div>
+        <div class="ops-list" id="buyerPolicies">Loading policies...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ops-panels">
+    <div class="ops-card">
+      <div class="ops-head">
+        <h4>Policy Controls</h4>
+        <div class="ops-actions">
+          <button class="ops-btn" onclick="refreshOps()">Refresh</button>
+          <button class="ops-btn" onclick="applyBudgetTemplate()">Apply Budget Policy</button>
+          <button class="ops-btn" onclick="runPolicyDryRun()">Dry Run Check</button>
+        </div>
+      </div>
+      <div class="ops-body">
+        <div class="ops-kv" id="policyKv"></div>
+        <div class="ops-list" id="policyList">Loading policies...</div>
+      </div>
+    </div>
+    <div class="ops-card">
+      <div class="ops-head">
+        <h4>Audit & Compliance</h4>
+        <div class="ops-actions">
+          <button class="ops-btn" onclick="refreshOps()">Refresh</button>
+        </div>
+      </div>
+      <div class="ops-body">
+        <div class="ops-kv" id="auditKv"></div>
+        <div class="ops-list" id="auditList">Loading recent audit entries...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="market">
+    <div class="market-head">
+      <h3>Provider Marketplace</h3>
+      <span class="lane-badge" style="background:rgba(99,91,255,0.12);color:var(--blue);border:1px solid rgba(99,91,255,0.3)">Live x402 Ecosystem</span>
+      <div class="market-controls">
+        <input id="mkSearch" type="text" placeholder="Search services (e.g. blockchain, dns, weather)">
+        <select id="mkCategory">
+          <option value="">All categories</option>
+          <option value="data">data</option>
+          <option value="ai">ai</option>
+          <option value="search">search</option>
+          <option value="utility">utility</option>
+          <option value="finance">finance</option>
+        </select>
+        <button class="btn btn-a2a" style="padding:10px 14px" onclick="loadMarketplace()">Browse</button>
+      </div>
+    </div>
+    <div class="market-grid" id="marketGrid"></div>
+  </div>
+
+  <div class="lanes">
+    <!-- MCP Lane -->
+    <div class="lane lane-mcp">
+      <div class="lane-head">
+        <h3>MCP Payment</h3>
+        <span class="lane-badge">Tool Discovery + Auto Pay</span>
+      </div>
+      <div class="lane-body">
+        <div class="input-row">
+          <select id="mcpProvider" onchange="onProviderChange('mcp')">
+            <option value="">Loading providers...</option>
+          </select>
+          <input id="mcpQuery" type="text" value="example.com" placeholder="URL / domain / query">
+          <button class="btn btn-mcp" id="mcpBtn" onclick="runMcp()">Run MCP Flow</button>
+        </div>
+        <div class="price-bar" id="mcpPrice"></div>
+        <div class="network-bar" id="mcpNetworks"></div>
+        <div class="log" id="mcpLog"><div class="log-empty">Select a provider and click "Run MCP Flow"</div></div>
+        <div class="result-card" id="mcpResult">
+          <h4>Service Result</h4>
+          <div id="mcpSrContainer"></div>
+          <h4 style="margin-top:16px">Settlement Details</h4>
+          <dl class="result-kv" id="mcpKv"></dl>
+        </div>
+      </div>
+    </div>
+
+    <!-- A2A Lane -->
+    <div class="lane lane-a2a">
+      <div class="lane-head">
+        <h3>Agent-to-Agent Payment</h3>
+        <span class="lane-badge">HTTP 402 Negotiation</span>
+      </div>
+      <div class="lane-body">
+        <div class="input-row">
+          <select id="a2aProvider" onchange="onProviderChange('a2a')">
+            <option value="">Loading providers...</option>
+          </select>
+          <input id="a2aQuery" type="text" value="google.com" placeholder="URL / domain / query">
+          <button class="btn btn-a2a" id="a2aBtn" onclick="runA2a()">Run A2A Flow</button>
+        </div>
+        <div class="price-bar" id="a2aPrice"></div>
+        <div class="network-bar" id="a2aNetworks"></div>
+        <div class="log" id="a2aLog"><div class="log-empty">Select a provider and click "Run A2A Flow"</div></div>
+        <div class="result-card" id="a2aResult">
+          <h4>Service Result</h4>
+          <div id="a2aSrContainer"></div>
+          <h4 style="margin-top:16px">Settlement Details</h4>
+          <dl class="result-kv" id="a2aKv"></dl>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="arch-card">
+      <h3>Architecture — Both Flows Converge at Settlement</h3>
+      <div class="arch-grid">
+        <div class="arch-lane mcp">
+          <h4>MCP Payment Flow</h4>
+          <div class="arch-flow">
+            <span class="arch-n">MCP Client</span><span class="arch-a">&rarr;</span>
+            <span class="arch-n">tools/list</span><span class="arch-a">&rarr;</span>
+            <span class="arch-n">_meta.x402 pricing</span><span class="arch-a">&rarr;</span>
+            <span class="arch-n">tools/call + payment</span><span class="arch-a">&rarr;</span>
+            <span class="arch-n">Gordon /mcp</span><span class="arch-a">&rarr;</span>
+            <span class="arch-n">REST API proxy</span>
+          </div>
+        </div>
+        <div class="arch-lane a2a">
+          <h4>A2A Payment Flow</h4>
+          <div class="arch-flow">
+            <span class="arch-n">Buyer Agent</span><span class="arch-a">&rarr;</span>
+            <span class="arch-n">POST /execute</span><span class="arch-a">&rarr;</span>
+            <span class="arch-n">402 + PAYMENT-REQUIRED</span><span class="arch-a">&rarr;</span>
+            <span class="arch-n">Sign EIP-3009</span><span class="arch-a">&rarr;</span>
+            <span class="arch-n">Retry + PAYMENT-SIGNATURE</span>
+          </div>
+        </div>
+      </div>
+      <div class="converge">Both &rarr; <strong>Coinbase X402 Facilitator</strong> &rarr; <strong>Multi-Chain USDC Settlement (Base / Polygon / Arbitrum)</strong> &rarr; <strong>Provider receives payment directly</strong></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = 'http://localhost:3001';
+const API = API_BASE + '/api/v1';
+const MCP = API_BASE + '/mcp';
+const DEMO = API_BASE + '/api/demo';
+const DK = '';
+
+const CHAIN_NAMES = {
+  'eip155:8453':'Base','eip155:84532':'Base Sepolia','eip155:1':'Ethereum','eip155:137':'Polygon','eip155:42161':'Arbitrum',
+};
+const STRICT_SETTLEMENT_URLS = new Set([
+  'https://mesh.heurist.xyz/x402/agents/FirecrawlSearchDigestAgent/firecrawl_extract_web_data',
+  'https://mesh.heurist.xyz/x402/agents/FirecrawlSearchDigestAgent/firecrawl_scrape_url',
+  'https://mesh.heurist.xyz/x402/agents/EtherscanAgent/get_address_history',
+]);
+
+let providers = [];
+let marketplaceServices = [];
+const DEMO_X402_ONLY = true;
+const MARKETPLACE_EVM_ONLY = true;
+const laneState = {
+  mcp: { selectedNetwork:null, accepts:[], provider:null, action:null },
+  a2a: { selectedNetwork:null, accepts:[], provider:null, action:null },
+};
+let buyerApiKeysCache = [];
+
+function k() { return document.getElementById('apiKey').value || DK; }
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function fmt(ms) { return ms >= 1000 ? (ms/1000).toFixed(1)+'s' : ms+'ms'; }
+function short(s, n=6) { return s ? s.slice(0,n)+'...'+s.slice(-4) : '—'; }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function log(panel, tag, msg) {
+  const el = document.getElementById(panel);
+  if (el.querySelector('.log-empty')) el.innerHTML = '';
+  const ts = new Date().toLocaleTimeString('en-US', { hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  el.innerHTML += `<div class="log-entry"><span class="ts">${ts}</span><span class="tag tag-${tag}">${tag}</span><span class="msg">${msg}</span></div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function syntaxHighlight(json) {
+  if (typeof json !== 'string') json = JSON.stringify(json, null, 2);
+  return json.replace(/("(\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, m => {
+    let cls = 'j-num';
+    if (/^"/.test(m)) cls = /:$/.test(m) ? 'j-key' : 'j-str';
+    else if (/true|false/.test(m)) cls = 'j-bool';
+    else if (/null/.test(m)) cls = 'j-null';
+    return `<span class="${cls}">${m}</span>`;
+  });
+}
+
+async function apiFetch(path, opts={}) {
+  if (!k()) throw new Error('Buyer API key missing. Please login again.');
+  const headers = { 'X-API-Key': k(), 'Content-Type': 'application/json', ...opts.headers };
+  const r = await fetch(`${API}${path}`, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  const respHeaders = {};
+  for (const key of ['payment-required','payment-response']) {
+    const v = r.headers.get(key);
+    if (v) respHeaders[key] = v;
+  }
+  return { status: r.status, json: await r.json(), headers: respHeaders };
+}
+
+function requireBuyerSession() {
+  const session = JSON.parse(localStorage.getItem('gordon_user_session') || 'null');
+  const storedKey = localStorage.getItem('gordon_buyer_api_key') || session?.apiKey || '';
+  if (!session?.email || !storedKey) {
+    window.location.href = '/login';
+    return null;
+  }
+  document.getElementById('apiKey').value = storedKey;
+  return session;
+}
+
+function logoutBuyer() {
+  localStorage.removeItem('gordon_user_session');
+  localStorage.removeItem('gordon_buyer_api_key');
+  window.location.href = '/login';
+}
+
+async function refreshOps() {
+  try {
+    const [pol, polStats, ov, aud, recent] = await Promise.all([
+      apiFetch('/policies'),
+      apiFetch('/analytics/policies?days=7'),
+      apiFetch('/analytics/overview?days=7'),
+      apiFetch('/audit/stats'),
+      apiFetch('/audit?limit=8'),
+    ]);
+
+    const policies = pol.json?.policies || [];
+    document.getElementById('policyKv').innerHTML = `
+      <div class="k">Active Policies</div><div class="v">${policies.length}</div>
+      <div class="k">7d Policy Checks</div><div class="v">${polStats.json?.totalChecks ?? 0}</div>
+      <div class="k">Pass Rate</div><div class="v">${polStats.json?.passRate || 'N/A'}</div>
+      <div class="k">Top Rejection</div><div class="v">${ov.json?.topPolicyRejections?.[0]?.reason || '—'}</div>
+    `;
+    document.getElementById('policyList').innerHTML = policies.length
+      ? policies.slice(0, 8).map(p => `<div>${esc(p.name)} <span class="dim">(${esc(p.type)})</span></div>`).join('')
+      : '<div>No policies configured yet.</div>';
+
+    document.getElementById('auditKv').innerHTML = `
+      <div class="k">Total Audit Entries</div><div class="v">${aud.json?.totalEntries ?? aud.json?.total ?? '—'}</div>
+      <div class="k">Success Rate</div><div class="v">${aud.json?.successRate ?? '—'}</div>
+      <div class="k">Failed Events</div><div class="v">${aud.json?.failedEvents ?? '—'}</div>
+      <div class="k">Window</div><div class="v">Last 7 days</div>
+    `;
+    const entries = recent.json?.entries || recent.json?.items || [];
+    document.getElementById('auditList').innerHTML = entries.length
+      ? entries.slice(0, 8).map(e => `<div>${esc(e.eventType || e.event_type || 'event')} <span class="dim">${esc(e.outcome || '')}</span></div>`).join('')
+      : '<div>No recent audit entries.</div>';
+  } catch (e) {
+    document.getElementById('policyList').textContent = `Failed to load policy data: ${e.message}`;
+    document.getElementById('auditList').textContent = `Failed to load audit data: ${e.message}`;
+  }
+  loadBuyerOnboarding();
+}
+
+function getStoredWalletMode() {
+  return localStorage.getItem('gdn_demo_wallet_mode') || 'managed';
+}
+
+function getStoredExternalWallet() {
+  return localStorage.getItem('gdn_demo_external_wallet') || '';
+}
+
+function updateWalletMode() {
+  const mode = document.getElementById('walletMode').value;
+  localStorage.setItem('gdn_demo_wallet_mode', mode);
+  loadBuyerOnboarding();
+}
+
+function saveExternalWallet() {
+  const value = (document.getElementById('externalWallet').value || '').trim();
+  if (value && !/^0x[a-fA-F0-9]{40}$/.test(value)) {
+    alert('Enter a valid EVM wallet address (0x...)');
+    return;
+  }
+  localStorage.setItem('gdn_demo_external_wallet', value);
+  document.getElementById('externalWallet').value = value;
+  localStorage.setItem('gdn_demo_wallet_mode', 'external');
+  document.getElementById('walletMode').value = 'external';
+  loadBuyerOnboarding();
+}
+
+async function listBuyerApiKeys() {
+  const { status, json } = await apiFetch('/orgs/me/api-keys');
+  if (status >= 400) throw new Error(json?.error?.message || 'Failed to list API keys');
+  return json?.keys || [];
+}
+
+async function createBuyerApiKey() {
+  try {
+    const body = {
+      name: `Buyer Key ${new Date().toISOString().slice(0, 10)}`,
+      scopes: ['*'],
+    };
+    const { status, json } = await apiFetch('/orgs/me/api-keys', { method: 'POST', body });
+    if (status >= 400) throw new Error(json?.error?.message || 'Create key failed');
+    document.getElementById('latestBuyerKey').value = json?.key || '';
+    await loadBuyerOnboarding();
+    alert('Buyer API key issued. Use it for client-side buyer flow.');
+  } catch (e) {
+    alert(`Issue key failed: ${e.message}`);
+  }
+}
+
+async function createQuickBuyerPolicy() {
+  try {
+    const name = (document.getElementById('policyNameInput').value || '').trim() || 'Demo Buyer Tx Cap';
+    const cap = Number(document.getElementById('policyCapInput').value || 0);
+    if (!Number.isFinite(cap) || cap <= 0) throw new Error('Max amount must be > 0');
+    const body = {
+      name,
+      type: 'transaction',
+      enabled: true,
+      priority: 95,
+      conditions: { transactionType: ['agent-to-agent', 'agent-to-merchant'] },
+      rules: { maxTransactionAmount: cap, fallbackAction: 'deny' },
+    };
+    const { status, json } = await apiFetch('/policies', { method: 'POST', body });
+    if (status >= 400) throw new Error(json?.error?.message || 'Create policy failed');
+    await loadBuyerOnboarding();
+    await refreshOps();
+    alert(`Policy added: ${name} ($${cap} max per tx)`);
+  } catch (e) {
+    alert(`Add policy failed: ${e.message}`);
+  }
+}
+
+async function togglePolicy(policyId, enabled) {
+  try {
+    const { status, json } = await apiFetch(`/policies/${policyId}`, { method: 'PUT', body: { enabled } });
+    if (status >= 400) throw new Error(json?.error?.message || 'Update policy failed');
+    await loadBuyerOnboarding();
+    await refreshOps();
+  } catch (e) {
+    alert(`Policy update failed: ${e.message}`);
+  }
+}
+
+async function loadBuyerOnboarding() {
+  const walletMode = getStoredWalletMode();
+  const extWallet = getStoredExternalWallet();
+  const kv = document.getElementById('buyerOnboardKv');
+  const keysEl = document.getElementById('buyerApiKeys');
+  const policiesEl = document.getElementById('buyerPolicies');
+  document.getElementById('walletMode').value = walletMode;
+  document.getElementById('externalWallet').value = extWallet;
+  try {
+    const [walletResp, treasuryResp, policiesResp, keys] = await Promise.all([
+      fetch(`${DEMO}/wallet`).then(r => r.json()).catch(() => ({})),
+      apiFetch('/treasury'),
+      apiFetch('/policies'),
+      listBuyerApiKeys().catch(() => []),
+    ]);
+    buyerApiKeysCache = keys;
+    const managedAddress = walletResp?.address || 'not configured';
+    const activeWallet = walletMode === 'external' && extWallet ? extWallet : managedAddress;
+    const treasury = treasuryResp?.json || {};
+    kv.innerHTML = `
+      <div class="k">Wallet Mode</div><div class="v">${walletMode === 'external' ? 'External Connected (demo)' : 'Gordon Managed Wallet'}</div>
+      <div class="k">Active Buyer Wallet</div><div class="v">${esc(activeWallet)}</div>
+      <div class="k">Managed Wallet USDC</div><div class="v">${walletResp?.usdcBalance != null ? Number(walletResp.usdcBalance).toFixed(4) + ' USDC' : '—'}</div>
+      <div class="k">Treasury Available</div><div class="v">$${Number(treasury.balance_available || treasury.balanceAvailable || 0).toFixed(2)} USDC</div>
+      <div class="k">Issued Buyer API Keys</div><div class="v">${keys.length}</div>
+    `;
+    keysEl.innerHTML = keys.length
+      ? keys.slice(0, 8).map(k => `<div>${esc(k.name || 'API Key')} <span class="dim">(${esc(k.key_prefix || '')}...)</span> <span class="dim">${k.enabled ? 'enabled' : 'disabled'}</span></div>`).join('')
+      : '<div>No buyer keys yet. Click "Issue Buyer API Key".</div>';
+    const policies = policiesResp?.json?.policies || [];
+    policiesEl.innerHTML = policies.length
+      ? policies.slice(0, 8).map(p => `<div>${esc(p.name)} <span class="dim">[${esc(p.type)}]</span> <button class="ops-btn" style="margin-left:8px;padding:2px 6px" onclick="togglePolicy('${esc(p.id)}', ${!p.enabled})">${p.enabled ? 'Disable' : 'Enable'}</button></div>`).join('')
+      : '<div>No policies configured.</div>';
+  } catch (e) {
+    kv.innerHTML = `<div class="k">Status</div><div class="v">Failed to load onboarding: ${esc(e.message)}</div>`;
+    keysEl.textContent = `Failed to load keys: ${e.message}`;
+    policiesEl.textContent = `Failed to load policies: ${e.message}`;
+  }
+}
+
+async function applyBudgetTemplate() {
+  try {
+    const tplRes = await apiFetch('/policy-templates');
+    const templates = tplRes.json?.templates || [];
+    const tpl = templates.find(t => String(t.id).includes('monthly-budget-1000'))
+      || templates.find(t => String(t.type) === 'budget')
+      || templates[0];
+    if (!tpl) throw new Error('No policy templates available');
+    const applyRes = await apiFetch(`/policy-templates/${tpl.id}/apply`, {
+      method: 'POST',
+      body: { name: `[Demo] ${tpl.name}` },
+    });
+    if (applyRes.status >= 400) throw new Error(applyRes.json?.error?.message || 'Template apply failed');
+    await refreshOps();
+    alert(`Applied policy template: ${tpl.name}`);
+  } catch (e) {
+    alert(`Apply template failed: ${e.message}`);
+  }
+}
+
+async function runPolicyDryRun() {
+  try {
+    const { pid } = getSelectedProvider('a2a');
+    const checkRes = await apiFetch('/policies/check', {
+      method: 'POST',
+      body: {
+        price: 0.02,
+        merchant: pid || 'demo-provider',
+        category: 'web-scraping',
+        transactionType: 'agent-to-agent',
+        serviceType: 'request',
+      },
+    });
+    if (checkRes.status >= 400) throw new Error(checkRes.json?.error?.message || 'Policy check failed');
+    const result = checkRes.json;
+    alert(`Policy dry run: ${result.allowed ? 'ALLOWED' : 'BLOCKED'}${result.reason ? ` — ${result.reason}` : ''}`);
+    await refreshOps();
+  } catch (e) {
+    alert(`Policy dry run failed: ${e.message}`);
+  }
+}
+
+async function mcpCall(method, params={}) {
+  const r = await fetch(MCP, {
+    method:'POST',
+    headers: { 'Content-Type':'application/json', 'X-API-Key': k() },
+    body: JSON.stringify({ jsonrpc:'2.0', id: Date.now(), method, params }),
+  });
+  return r.json();
+}
+
+// ── Provider + Network Selection ──
+
+async function loadProviders() {
+  try {
+    const { json } = await apiFetch('/providers');
+    const allProviders = json.providers || json || [];
+    providers = DEMO_X402_ONLY
+      ? allProviders.filter(p =>
+          (p.type === 'x402' || p.metadata?.x402Native === true) &&
+          (p.supportedNetworks || []).length > 0 &&
+          !!p.walletAddress,
+        )
+      : allProviders;
+  } catch { providers = []; }
+  populateSelects();
+}
+
+async function loadMarketplace() {
+  const grid = document.getElementById('marketGrid');
+  grid.innerHTML = '<div class="log-empty" style="grid-column:1/-1">Loading live marketplace services...</div>';
+  const rawQuery = (document.getElementById('mkSearch').value || '').trim();
+  const rawCategory = (document.getElementById('mkCategory').value || '').trim();
+  const q = encodeURIComponent(rawQuery);
+  const category = encodeURIComponent(rawCategory);
+  try {
+    const [{ json: browseJson }, { json: providersJson }] = await Promise.all([
+      apiFetch(`/marketplace/browse?q=${q}&category=${category}&limit=24`),
+      apiFetch('/providers'),
+    ]);
+    const raw = browseJson.services || [];
+    const localProviderServices = toLocalMarketplaceServices(
+      providersJson.providers || providersJson || [],
+      rawQuery,
+      rawCategory,
+    );
+    marketplaceServices = [...raw, ...localProviderServices]
+      .map(s => ({ ...s, displayName: deriveMarketplaceName(s) }))
+      .filter((svc, idx, arr) => {
+        const key = String(svc.registerUrl || svc.url || '').trim().toLowerCase();
+        return key && arr.findIndex(x => String(x.registerUrl || x.url || '').trim().toLowerCase() === key) === idx;
+      })
+      .filter(s => !MARKETPLACE_EVM_ONLY || isSettleableMarketplaceService(s));
+    renderMarketplace();
+  } catch (e) {
+    grid.innerHTML = `<div class="log-empty" style="grid-column:1/-1">Failed to load marketplace: ${esc(e.message)}</div>`;
+  }
+}
+
+function toLocalMarketplaceServices(localProviders, rawQuery, rawCategory) {
+  const q = String(rawQuery || '').trim().toLowerCase();
+  const category = String(rawCategory || '').trim().toLowerCase();
+  const items = (localProviders || []).map(p => {
+    const firstAction = Array.isArray(p.actions) && p.actions.length ? String(p.actions[0]) : 'request';
+    const price = Number(p.pricing?.[firstAction]);
+    return {
+      url: String(p.endpoint || ''),
+      registerUrl: String(p.endpoint || ''),
+      name: String(p.name || 'Local Provider'),
+      description: String(p.metadata?.description || `Registered in Gordon: ${p.name || 'provider'}`),
+      category: String(p.metadata?.category || p.type || 'utility'),
+      network: (p.supportedNetworks || [])[0] || 'eip155:8453',
+      price: Number.isFinite(price) ? `$${price}` : '',
+      priceUsd: Number.isFinite(price) ? price : null,
+      trustScore: null,
+      source: 'registered',
+    };
+  });
+  return items.filter((s) => {
+    if (category && String(s.category || '').toLowerCase() !== category) return false;
+    if (!q) return true;
+    const haystack = [
+      s.name,
+      s.description,
+      s.url,
+      s.registerUrl,
+      s.category,
+      s.network,
+      s.source,
+    ].join(' ').toLowerCase();
+    return haystack.includes(q);
+  });
+}
+
+function renderMarketplace() {
+  const grid = document.getElementById('marketGrid');
+  if (!marketplaceServices.length) {
+    grid.innerHTML = '<div class="log-empty" style="grid-column:1/-1">No services found. Tip: clear category filter and search by provider name/URL.</div>';
+    return;
+  }
+  const registered = new Set((providers || []).map(p => String(p.endpoint || '').trim().toLowerCase()));
+  grid.innerHTML = marketplaceServices.map((svc, i) => {
+    const svcEndpoint = String(svc.registerUrl || svc.url || '').trim().toLowerCase();
+    const reg = registered.has(svcEndpoint);
+    return `
+      <div class="svc-card" id="svc_${i}">
+        <div class="svc-title">
+          <strong>${esc(svc.displayName || svc.name || 'Service')}</strong>
+          <span class="pill ${reg ? 'pill-g' : 'pill-b'}" style="font-size:8px">${reg ? 'Registered' : esc(svc.source)}</span>
+        </div>
+        <div class="svc-meta">
+          <span>${esc(svc.category || 'utility')}</span>
+          <span>${esc(normalizeNetworkLabel(svc.network || 'unknown network'))}</span>
+          <span>${esc(svc.price || (svc.priceUsd != null ? '$'+svc.priceUsd : 'price n/a'))}</span>
+          <span>trust ${svc.trustScore != null ? esc(String(svc.trustScore)) : 'n/a'}</span>
+        </div>
+        <div class="svc-desc">${esc((svc.description || '').slice(0, 180))}</div>
+        <div class="svc-actions">
+          <button class="btn-mini btn-probe" onclick="probeMarketplace(${i})">Probe</button>
+          <button class="btn-mini btn-reg" ${reg ? 'disabled' : ''} onclick="registerMarketplace(${i})">${reg ? 'Registered' : 'Register in Gordon'}</button>
+        </div>
+        <div class="probe-box" id="probe_${i}" style="display:none"></div>
+      </div>
+    `;
+  }).join('');
+}
+
+function isSettleableMarketplaceService(svc) {
+  const network = String(svc.network || '').toLowerCase();
+  return (
+    network.includes('base') ||
+    network.includes('polygon') ||
+    network.includes('arbitrum') ||
+    network.includes('ethereum') ||
+    network.startsWith('eip155:')
+  );
+}
+
+function normalizeNetworkLabel(network) {
+  const n = String(network || '').toLowerCase();
+  if (n === 'base-mainnet') return 'Base';
+  if (n === 'base-sepolia') return 'Base Sepolia';
+  return network;
+}
+
+function deriveMarketplaceName(svc) {
+  const n = String(svc.name || '').trim();
+  if (n && n.toLowerCase() !== 'unnamed service') return n;
+  const provider = String(svc.provider || '').trim();
+  if (provider) return provider;
+  try {
+    const host = new URL(String(svc.url || '')).hostname.replace(/^www\./, '');
+    if (host) {
+      const first = host.split('.')[0] || host;
+      const pretty = first.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      return `${pretty} Service`;
+    }
+  } catch {}
+  const category = String(svc.category || 'x402').replace(/[-_]/g, ' ');
+  return `${category.charAt(0).toUpperCase() + category.slice(1)} Service`;
+}
+
+function providerActionEndpoint(provider, action) {
+  if (provider?.metadata?.endpoints?.[action]) return String(provider.metadata.endpoints[action]);
+  return String(provider?.endpoint || '');
+}
+
+function isStrictSettlementProvider(provider, action) {
+  const ep = providerActionEndpoint(provider, action).trim();
+  return STRICT_SETTLEMENT_URLS.has(ep);
+}
+
+async function probeMarketplace(index) {
+  const svc = marketplaceServices[index];
+  const targetUrl = svc.registerUrl || svc.url;
+  const box = document.getElementById(`probe_${index}`);
+  box.style.display = 'block';
+  box.textContent = 'Probing live 402 challenge...';
+  try {
+    const { json } = await apiFetch(`/marketplace/probe?url=${encodeURIComponent(targetUrl)}`);
+    if (!json.x402Compatible) {
+      box.textContent = `Not x402-compatible (status ${json.status}) for ${targetUrl}`;
+      return;
+    }
+    box.innerHTML = `x402 compatible
+price: ${json.priceUsdc != null ? '$'+Number(json.priceUsdc).toFixed(6)+' USDC' : 'n/a'}
+network: ${esc(json.network || 'n/a')}
+payTo: ${esc(short(json.payTo || '', 10))}
+accepts: ${esc(String((json.rawAccepts || []).length))}`;
+  } catch (e) {
+    box.textContent = `Probe failed: ${e.message}`;
+  }
+}
+
+async function registerMarketplace(index) {
+  const svc = marketplaceServices[index];
+  const targetUrl = svc.registerUrl || svc.url;
+  try {
+    const { status, json } = await apiFetch('/marketplace/register', {
+      method: 'POST',
+      body: { url: targetUrl, name: svc.name, category: svc.category, source: svc.source, description: svc.description },
+    });
+    if (status >= 400) throw new Error(json?.error?.message || 'Register failed');
+    await loadProviders();
+    renderMarketplace();
+  } catch (e) {
+    alert('Registration failed: ' + e.message);
+  }
+}
+
+function populateSelects() {
+  ['mcp','a2a'].forEach(lane => {
+    const sel = document.getElementById(`${lane}Provider`);
+    sel.innerHTML = '';
+    if (!providers.length) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = DEMO_X402_ONLY
+        ? 'No x402-settleable providers available'
+        : 'No providers available';
+      sel.appendChild(opt);
+      return;
+    }
+    const options = [];
+    providers.forEach(p => {
+      const types = (p.metadata?.x402Native ? ' [x402-native]' : '') + (p.type === 'hybrid' ? ' [hybrid]' : '');
+      p.actions.forEach(a => {
+        const recommended = isStrictSettlementProvider(p, a);
+        const opt = document.createElement('option');
+        opt.value = `${p.id}|${a}`;
+        opt.textContent = `${recommended ? '★ ' : ''}${p.name} — ${a}${types}${recommended ? ' [recommended]' : ''}`;
+        options.push({ opt, recommended, id: p.id, action: a });
+      });
+    });
+    options
+      .sort((x, y) => {
+        if (x.recommended !== y.recommended) return x.recommended ? -1 : 1;
+        return `${x.id}|${x.action}`.localeCompare(`${y.id}|${y.action}`);
+      })
+      .forEach(({ opt }) => sel.appendChild(opt));
+    if (sel.options.length > 0) {
+      sel.selectedIndex = 0;
+      onProviderChange(lane);
+    }
+  });
+}
+
+function getSelectedProvider(lane) {
+  const val = document.getElementById(`${lane}Provider`).value;
+  const [pid, action] = val.split('|');
+  return { pid, action, provider: providers.find(p => p.id === pid) };
+}
+
+function onProviderChange(lane) {
+  const { pid, action, provider } = getSelectedProvider(lane);
+  if (!provider) return;
+  laneState[lane].provider = pid;
+  laneState[lane].action = action;
+
+  const input = document.getElementById(`${lane}Query`);
+  if (pid === 'robtex' && action === 'dns') input.placeholder = 'Domain name (e.g. google.com)';
+  else if (pid === 'robtex' && action === 'ip') input.placeholder = 'IP address (e.g. 8.8.8.8)';
+  else if (pid === 'x402-direct') input.placeholder = 'Search query (e.g. weather)';
+  else input.placeholder = 'URL to scrape (e.g. https://example.com)';
+
+  showNetworkOptions(lane, provider.supportedNetworks || []);
+  showPriceBar(lane, provider, action);
+}
+
+function showNetworkOptions(lane, networks) {
+  const bar = document.getElementById(`${lane}Networks`);
+  if (!networks.length) { bar.classList.remove('show'); return; }
+  bar.classList.add('show');
+  bar.innerHTML = '<label>Settlement Network:</label>';
+  networks.forEach((net, i) => {
+    const name = CHAIN_NAMES[net] || net;
+    const btn = document.createElement('button');
+    btn.className = `net-opt ${i === 0 ? 'selected' : ''}`;
+    btn.textContent = name;
+    btn.dataset.network = net;
+    btn.onclick = () => {
+      bar.querySelectorAll('.net-opt').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      laneState[lane].selectedNetwork = net;
+    };
+    bar.appendChild(btn);
+  });
+  laneState[lane].selectedNetwork = networks[0];
+}
+
+function showPriceBar(lane, provider, action) {
+  const bar = document.getElementById(`${lane}Price`);
+  const cost = provider.pricing?.[action];
+  if (cost == null) { bar.classList.remove('show'); return; }
+  const isNative = provider.metadata?.x402Native || provider.type === 'x402';
+  bar.classList.add('show');
+  bar.innerHTML = `
+    <span class="pb-src ${isNative ? 'pb-src-probe' : 'pb-src-fallback'}">${isNative ? 'x402 Native' : 'DB Price'}</span>
+    <span class="pb-item"><span class="pb-label">Est. cost:</span><span class="pb-val">$${cost.toFixed(4)}</span></span>
+    <span class="pb-sep">|</span>
+    <span class="pb-item"><span class="pb-label">Provider:</span><span class="pb-val">${provider.name}</span></span>
+    <span class="pb-sep">|</span>
+    <span class="pb-item"><span class="pb-label">Pay to:</span><span class="pb-val" style="font-size:10px">${short(provider.walletAddress || '', 8)}</span></span>
+  `;
+}
+
+function updatePriceBarFromResponse(lane, priceBreakdown) {
+  if (!priceBreakdown) return;
+  const bar = document.getElementById(`${lane}Price`);
+  bar.classList.add('show');
+  const isProbe = priceBreakdown.source === 'probe';
+  bar.innerHTML = `
+    <span class="pb-src ${isProbe ? 'pb-src-probe' : 'pb-src-fallback'}">${isProbe ? 'Live Probe' : 'Fallback'}</span>
+    <span class="pb-item"><span class="pb-label">Provider:</span><span class="pb-val">$${priceBreakdown.providerCost.toFixed(4)}</span></span>
+    <span class="pb-sep">+</span>
+    <span class="pb-item"><span class="pb-label">Gordon ${priceBreakdown.feePercent}%:</span><span class="pb-val">$${priceBreakdown.gordonFee.toFixed(4)}</span></span>
+    <span class="pb-sep">=</span>
+    <span class="pb-item"><span class="pb-label">Total:</span><span class="pb-val pb-total">$${priceBreakdown.total.toFixed(4)} USDC</span></span>
+  `;
+}
+
+// ── Service Result Renderer ──
+
+function renderServiceResult(containerId, sr, rawData) {
+  const container = document.getElementById(containerId);
+  if (!sr && !rawData) {
+    container.innerHTML = '<div style="padding:20px;color:var(--text-dim);text-align:center;font-size:12px">No service result returned</div>';
+    return;
+  }
+
+  const content = sr?.content || JSON.stringify(rawData, null, 2);
+  const ct = sr?.contentType || 'application/json';
+  const url = sr?.url || '';
+  const summary = sr?.summary || '';
+  const typeLabel = ct.includes('html') ? 'HTML' : ct.includes('json') ? 'JSON' : ct.includes('markdown') ? 'MD' : 'TEXT';
+  const typeClass = ct.includes('html') ? 'html' : ct.includes('json') ? 'json' : ct.includes('markdown') ? 'md' : 'text';
+  const charCount = content.length;
+
+  let summaryHtml = '';
+  if (summary) {
+    summaryHtml = `<div class="sr-summary-card"><dl class="sr-summ-kv"><dt>Summary</dt><dd>${esc(summary)}</dd></dl></div>`;
+  }
+  if (ct.includes('json') && !summary) {
+    try {
+      const parsed = JSON.parse(content);
+      const keys = Object.keys(parsed).slice(0, 5);
+      const kvPairs = keys.map(k => `<dt>${esc(k)}</dt><dd>${esc(String(typeof parsed[k] === 'object' ? JSON.stringify(parsed[k]).slice(0,100) : parsed[k]).slice(0,100))}</dd>`).join('');
+      if (kvPairs) summaryHtml = `<div class="sr-summary-card"><dl class="sr-summ-kv">${kvPairs}</dl></div>`;
+    } catch {}
+  }
+
+  let renderedBody = '';
+  if (ct.includes('html')) {
+    renderedBody = `<iframe srcdoc="${esc(content)}" sandbox="allow-same-origin" style="width:100%;height:350px;border:0;background:#fff;border-radius:0 0 12px 12px;"></iframe>`;
+  } else if (ct.includes('json')) {
+    renderedBody = `<div class="sr-json">${syntaxHighlight(content)}</div>`;
+  } else if (ct.includes('markdown')) {
+    renderedBody = `<div class="sr-md">${simpleMarkdown(content)}</div>`;
+  } else {
+    renderedBody = `<div class="sr-json">${esc(content.slice(0, 5000))}</div>`;
+  }
+
+  const id = containerId + '_' + Date.now();
+  container.innerHTML = `
+    <div class="sr-container">
+      <div class="sr-toolbar">
+        <span class="sr-type sr-type-${typeClass}">${typeLabel}</span>
+        ${url ? `<span class="sr-url">${esc(url)}</span>` : ''}
+        <span class="sr-info">${charCount.toLocaleString()} chars</span>
+        <div class="sr-toggle-btns">
+          <button class="active" onclick="toggleSrView('${id}','rendered',this)">Rendered</button>
+          <button onclick="toggleSrView('${id}','source',this)">Source</button>
+        </div>
+      </div>
+      ${summaryHtml}
+      <div class="sr-body-rendered" id="${id}_rendered">${renderedBody}</div>
+      <div class="sr-body-source" id="${id}_source">${esc(content.slice(0, 10000))}</div>
+    </div>
+  `;
+}
+
+function toggleSrView(id, view, btn) {
+  const rendered = document.getElementById(id + '_rendered');
+  const source = document.getElementById(id + '_source');
+  if (view === 'source') {
+    rendered.style.display = 'none';
+    source.style.display = 'block';
+  } else {
+    rendered.style.display = '';
+    source.style.display = 'none';
+  }
+  btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function simpleMarkdown(md) {
+  return md
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`(.+?)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+    .replace(/\n/g, '<br>');
+}
+
+// ── MCP Flow ──
+
+async function runMcp() {
+  const { pid, action, provider } = getSelectedProvider('mcp');
+  if (!pid) return;
+  const query = document.getElementById('mcpQuery').value;
+  if (!query) return;
+  const btn = document.getElementById('mcpBtn');
+  btn.disabled = true; btn.textContent = 'Running...';
+  document.getElementById('mcpLog').innerHTML = '';
+  document.getElementById('mcpResult').classList.remove('show');
+  const t0 = Date.now();
+
+  try {
+    log('mcpLog', 'mcp', 'JSON-RPC <code>initialize</code> &rarr; Gordon /mcp');
+    const init = await mcpCall('initialize', { protocolVersion:'2025-06-18', capabilities:{}, clientInfo:{ name:'demo-client', version:'1.0' } });
+    log('mcpLog', 'ok', `Server: <strong>${init.result?.serverInfo?.name}</strong> v${init.result?.serverInfo?.version} <span class="dim">${fmt(Date.now()-t0)}</span>`);
+
+    log('mcpLog', 'mcp', 'JSON-RPC <code>tools/list</code> — discovering tools...');
+    const toolsResp = await mcpCall('tools/list');
+    const tools = toolsResp.result?.tools || [];
+    const pricedTools = tools.filter(t => t._meta?.x402);
+    log('mcpLog', 'ok', `${tools.length} tools, <strong>${pricedTools.length} with x402 pricing</strong> <span class="dim">${fmt(Date.now()-t0)}</span>`);
+
+    for (const t of pricedTools.slice(0, 3)) {
+      const amt = (parseInt(t._meta.x402.maxAmountRequired) / 1e6).toFixed(4);
+      log('mcpLog', 'info', `<code>${t.name}</code> — $${amt} USDC on ${t._meta.x402.network}`);
+    }
+
+    const params = pid === 'robtex' ? (action === 'dns' ? { query, domain: query } : { query, ip: query }) :
+                   pid === 'x402-direct' ? { query } : { url: query };
+    const selectedNet = laneState.mcp.selectedNetwork;
+
+    const scrapeReq = { provider: pid, action, params, max_payment_usdc: 0.50 };
+    log('mcpLog', 'req', `POST /payments/execute (no payment) → <strong>${provider?.name}</strong> / ${action}`);
+    const quoteResp = await apiFetch('/payments/execute', { method:'POST', body:scrapeReq });
+
+    if (quoteResp.status === 402) {
+      const pr = quoteResp.json;
+      const ac = pr.accepts?.[0] || {};
+      const amt = (parseInt(ac.maxAmountRequired||'0') / 1e6).toFixed(4);
+      const pb = pr.priceBreakdown;
+      updatePriceBarFromResponse('mcp', pb);
+
+      if (pb) {
+        log('mcpLog', '402', `PAYMENT-REQUIRED: <strong>$${pb.total.toFixed(4)} USDC</strong> (Provider $${pb.providerCost.toFixed(4)} + Gordon ${pb.feePercent}% $${pb.gordonFee.toFixed(4)}) — <em>${pb.source}</em>`);
+      } else {
+        log('mcpLog', '402', `PAYMENT-REQUIRED: <strong>$${amt} USDC</strong> to <code>${short(ac.payTo)}</code>`);
+      }
+      log('mcpLog', 'info', `Networks: ${pr.accepts?.map(a => CHAIN_NAMES[a.network] || a.network).join(', ')}`);
+
+      log('mcpLog', 'sign', 'Signing EIP-3009 TransferWithAuthorization...');
+      const signResp = await fetch(`${DEMO}/sign-x402${selectedNet ? '?preferredNetwork='+selectedNet : ''}`, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(pr),
+      });
+      const signData = await signResp.json();
+
+      if (signData.error) {
+        log('mcpLog', 'err', `Sign failed: ${signData.error}`);
+        btn.disabled = false; btn.textContent = 'Run MCP Flow'; return;
+      }
+      log('mcpLog', 'ok', `Signed by <code>${short(signData.buyerAddress)}</code> — ${signData.amountUsdc} USDC on <strong>${signData.chainName || 'Base'}</strong> <span class="dim">${fmt(Date.now()-t0)}</span>`);
+
+      log('mcpLog', 'mcp', `JSON-RPC <code>tools/call</code> + PAYMENT-SIGNATURE → <strong>${provider?.name}</strong>`);
+      const toolName = pid === 'robtex' ? (action === 'dns' ? 'dns_lookup' : 'ip_info') : pid === 'x402-direct' ? 'x402_search' : 'web_scrape';
+      const callResp = await fetch(MCP, {
+        method:'POST',
+        headers: { 'Content-Type':'application/json', 'X-API-Key': k(), 'PAYMENT-SIGNATURE': signData.paymentHeader },
+        body: JSON.stringify({
+          jsonrpc:'2.0', id: Date.now(), method:'tools/call',
+          params: { name: toolName, arguments: params, _meta: { x402: { paymentHeader: signData.paymentHeader } } },
+        }),
+      });
+      const callData = await callResp.json();
+      const elapsed = Date.now() - t0;
+
+      if (callData.error) {
+        log('mcpLog', 'err', `Tool error: ${callData.error.message} <span class="dim">${fmt(elapsed)}</span>`);
+      } else {
+        const content = callData.result?.content?.[0]?.text || '{}';
+        const meta = callData.result?._meta;
+        let parsed = {};
+        try { parsed = JSON.parse(content); } catch {}
+
+        const txHash = meta?.x402?.txHash || parsed.x402Settlement?.txHash;
+        const expUrl = signData?.explorerUrl || 'https://basescan.org';
+        if (txHash) {
+          log('mcpLog', 'settle', `ON-CHAIN SETTLED — <a href="${expUrl}/tx/${txHash}" target="_blank"><code>${short(txHash,10)}</code></a> <span class="dim">${fmt(elapsed)}</span>`);
+        } else {
+          log('mcpLog', 'ok', `Executed <span class="dim">${fmt(elapsed)}</span>`);
+        }
+
+        showMcpResult(parsed, signData, meta, elapsed, pb);
+      }
+    } else {
+      log('mcpLog', 'ok', `Direct execution (no 402) <span class="dim">${fmt(Date.now()-t0)}</span>`);
+      showMcpResult(quoteResp.json, null, null, Date.now()-t0, null);
+    }
+  } catch (e) {
+    log('mcpLog', 'err', `Error: ${e.message}`);
+  }
+
+  btn.disabled = false; btn.textContent = 'Run MCP Flow';
+  loadTreasury(); loadWallet(); refreshOps();
+}
+
+function showMcpResult(data, signData, meta, elapsed, pb) {
+  const card = document.getElementById('mcpResult');
+  card.classList.add('show');
+
+  renderServiceResult('mcpSrContainer', data?.serviceResult, data?.data);
+
+  const txHash = meta?.x402?.txHash || data?.x402Settlement?.txHash || data?.baseTxHash;
+  const network = signData?.chainName || meta?.x402?.network || data?.x402Settlement?.network || 'Base';
+  const expUrl = signData?.explorerUrl || 'https://basescan.org';
+  const mcpPb = pb || data?.priceBreakdown || meta?.priceBreakdown;
+  const { pid } = getSelectedProvider('mcp');
+
+  document.getElementById('mcpKv').innerHTML = `
+    <dt>Protocol</dt><dd>MCP + X402 v2</dd>
+    <dt>Entry Point</dt><dd>/mcp (JSON-RPC)</dd>
+    <dt>Provider</dt><dd>${data?.provider || pid || '—'}</dd>
+    ${mcpPb ? `
+      <dt>Provider Cost</dt><dd>$${mcpPb.providerCost.toFixed(4)} USDC</dd>
+      <dt>Gordon Fee (${mcpPb.feePercent}%)</dt><dd>$${mcpPb.gordonFee.toFixed(4)} USDC</dd>
+      <dt>Total Charged</dt><dd style="color:var(--green);font-weight:700">$${mcpPb.total.toFixed(4)} USDC</dd>
+      <dt>Price Source</dt><dd>${mcpPb.source === 'probe' ? '<span style="color:var(--green)">Live x402 Probe</span>' : '<span style="color:var(--orange)">DB Fallback</span>'}</dd>
+    ` : `<dt>Amount</dt><dd>${signData ? signData.amountUsdc + ' USDC' : '—'}</dd>`}
+    <dt>Buyer</dt><dd>${signData?.buyerAddress || '—'}</dd>
+    <dt>Pay To</dt><dd>${signData?.paymentPayload?.accepted?.payTo ? short(signData.paymentPayload.accepted.payTo, 10) : '—'}</dd>
+    <dt>Network</dt><dd>${network}</dd>
+    ${txHash ? `<dt>TX Hash</dt><dd><a href="${expUrl}/tx/${txHash}" target="_blank">${short(txHash,12)}</a></dd>` : ''}
+    <dt>Time</dt><dd>${fmt(elapsed)}</dd>
+  `;
+}
+
+// ── A2A Flow ──
+
+async function runA2a() {
+  const { pid, action, provider } = getSelectedProvider('a2a');
+  if (!pid) return;
+  const query = document.getElementById('a2aQuery').value;
+  if (!query) return;
+  const btn = document.getElementById('a2aBtn');
+  btn.disabled = true; btn.textContent = 'Running...';
+  document.getElementById('a2aLog').innerHTML = '';
+  document.getElementById('a2aResult').classList.remove('show');
+  const t0 = Date.now();
+
+  try {
+    const params = pid === 'robtex' ? (action === 'dns' ? { query, domain: query } : { query, ip: query }) :
+                   pid === 'x402-direct' ? { query } : { url: query };
+    const selectedNet = laneState.a2a.selectedNetwork;
+    const body = { provider: pid, action, params, max_payment_usdc: 0.50 };
+
+    log('a2aLog', 'req', `POST /api/v1/payments/execute → <strong>${provider?.name}</strong> / ${action}`);
+    const r1 = await apiFetch('/payments/execute', { method:'POST', body });
+    const t1 = Date.now() - t0;
+
+    if (r1.status === 402) {
+      const pr = r1.json;
+      const ac = pr.accepts?.[0] || {};
+      const chainCount = pr.accepts?.length || 1;
+      const pb = pr.priceBreakdown;
+      updatePriceBarFromResponse('a2a', pb);
+
+      log('a2aLog', '402', `<strong>HTTP 402 Payment Required</strong> — ${chainCount} chain${chainCount > 1 ? 's' : ''} <span class="dim">${fmt(t1)}</span>`);
+      if (pb) {
+        log('a2aLog', 'info', `Provider: <strong>$${pb.providerCost.toFixed(4)}</strong> + Gordon ${pb.feePercent}%: <strong>$${pb.gordonFee.toFixed(4)}</strong> = <strong>$${pb.total.toFixed(4)} USDC</strong> <em>(${pb.source})</em>`);
+      }
+      log('a2aLog', 'info', `Networks: ${pr.accepts?.map(a => (CHAIN_NAMES[a.network] || a.network)).join(', ')} | Pay to: <code>${short(ac.payTo)}</code>`);
+
+      // Update network bar with real accepts
+      if (pr.accepts?.length) {
+        const nets = pr.accepts.map(a => a.network).filter(Boolean);
+        showNetworkOptions('a2a', nets);
+      }
+
+      log('a2aLog', 'sign', 'Buyer accepts — signing EIP-3009 TransferWithAuthorization...');
+      const signResp = await fetch(`${DEMO}/sign-x402${selectedNet ? '?preferredNetwork='+selectedNet : ''}`, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(pr),
+      });
+      const signData = await signResp.json();
+
+      if (signData.error) {
+        log('a2aLog', 'err', `Sign failed: ${signData.error}`);
+        btn.disabled = false; btn.textContent = 'Run A2A Flow'; return;
+      }
+      log('a2aLog', 'ok', `Signed from <code>${short(signData.buyerAddress)}</code> — ${signData.amountUsdc} USDC on <strong>${signData.chainName || 'Base'}</strong> <span class="dim">${fmt(Date.now()-t0)}</span>`);
+
+      log('a2aLog', 'req', `Retry POST + <code>PAYMENT-SIGNATURE</code> header`);
+      log('a2aLog', 'info', 'Gordon → Coinbase Facilitator /verify → service execution → /settle');
+
+      const r2 = await apiFetch('/payments/execute', {
+        method:'POST', body,
+        headers: { 'PAYMENT-SIGNATURE': signData.paymentHeader },
+      });
+      const t2 = Date.now() - t0;
+
+      if (r2.status >= 400) {
+        log('a2aLog', 'err', `Failed (${r2.status}): ${r2.json?.error || JSON.stringify(r2.json).slice(0,200)} <span class="dim">${fmt(t2)}</span>`);
+      } else {
+        log('a2aLog', 'ok', `Facilitator <strong>VERIFIED</strong> <span class="dim">${fmt(t2)}</span>`);
+
+        const txHash = r2.json?.x402Settlement?.txHash || r2.json?.baseTxHash;
+        const settleNet = r2.json?.x402Settlement?.network || signData?.chainName || 'Base';
+        const expUrl = signData?.explorerUrl || 'https://basescan.org';
+        if (txHash) {
+          log('a2aLog', 'settle', `ON-CHAIN SETTLED on <strong>${settleNet}</strong> — <a href="${expUrl}/tx/${txHash}" target="_blank"><code>${short(txHash,10)}</code></a>`);
+        }
+
+        if (r2.headers['payment-response']) {
+          log('a2aLog', 'info', `<code>PAYMENT-RESPONSE</code> header received (settlement receipt)`);
+        }
+
+        const elapsed = Date.now() - t0;
+        log('a2aLog', 'ok', `<strong>200 OK</strong> — service result + payment receipt <span class="dim">${fmt(elapsed)}</span>`);
+        showA2aResult(r2.json, pr, signData, txHash, elapsed, pb);
+      }
+    } else if (r1.json?.status === 'completed') {
+      log('a2aLog', 'ok', `Direct execution <span class="dim">${fmt(t1)}</span>`);
+      showA2aResult(r1.json, null, null, r1.json?.baseTxHash, t1, null);
+    } else {
+      log('a2aLog', 'err', `Unexpected (${r1.status}): ${JSON.stringify(r1.json).slice(0,300)}`);
+    }
+  } catch (e) {
+    log('a2aLog', 'err', `Error: ${e.message}`);
+  }
+
+  btn.disabled = false; btn.textContent = 'Run A2A Flow';
+  loadTreasury(); loadWallet(); refreshOps();
+}
+
+function showA2aResult(data, paymentReq, signData, txHash, elapsed, pb) {
+  const card = document.getElementById('a2aResult');
+  card.classList.add('show');
+
+  renderServiceResult('a2aSrContainer', data?.serviceResult, data?.data);
+
+  const network = signData?.chainName || data?.x402Settlement?.network || 'Base';
+  const expUrl = signData?.explorerUrl || 'https://basescan.org';
+  const providerPayTo = paymentReq?.accepts?.[0]?.payTo;
+  const a2aPb = pb || data?.priceBreakdown || paymentReq?.priceBreakdown;
+  const { pid } = getSelectedProvider('a2a');
+
+  document.getElementById('a2aKv').innerHTML = `
+    <dt>Protocol</dt><dd>HTTP 402 + X402 v2</dd>
+    <dt>Entry Point</dt><dd>REST /api/v1/payments/execute</dd>
+    <dt>Provider</dt><dd>${data?.provider || pid || '—'}</dd>
+    ${a2aPb ? `
+      <dt>Provider Cost</dt><dd>$${a2aPb.providerCost.toFixed(4)} USDC</dd>
+      <dt>Gordon Fee (${a2aPb.feePercent}%)</dt><dd>$${a2aPb.gordonFee.toFixed(4)} USDC</dd>
+      <dt>Total Charged</dt><dd style="color:var(--green);font-weight:700">$${a2aPb.total.toFixed(4)} USDC</dd>
+      <dt>Price Source</dt><dd>${a2aPb.source === 'probe' ? '<span style="color:var(--green)">Live x402 Probe</span>' : '<span style="color:var(--orange)">DB Fallback</span>'}</dd>
+    ` : `<dt>Amount</dt><dd>${signData ? signData.amountUsdc + ' USDC' : '—'}</dd>`}
+    <dt>Buyer</dt><dd>${signData?.buyerAddress || '—'}</dd>
+    <dt>Pay To (Provider)</dt><dd>${providerPayTo ? short(providerPayTo, 10) : '—'}</dd>
+    <dt>Network</dt><dd>${network}</dd>
+    <dt>Chains Offered</dt><dd>${paymentReq?.accepts?.map(a => CHAIN_NAMES[a.network] || a.network).join(', ') || '—'}</dd>
+    ${txHash ? `<dt>TX Hash</dt><dd><a href="${expUrl}/tx/${txHash}" target="_blank">${short(txHash,12)}</a></dd>` : ''}
+    <dt>Payment ID</dt><dd>${data?.paymentId || '—'}</dd>
+    <dt>Time</dt><dd>${fmt(elapsed)}</dd>
+  `;
+}
+
+// ── Init ──
+
+async function loadTreasury() {
+  try {
+    const { json } = await apiFetch('/treasury');
+    document.getElementById('treasuryBal').textContent = '$' + Number(json.balance_available || json.balanceAvailable || 0).toFixed(2) + ' USDC';
+  } catch {}
+}
+
+async function loadWallet() {
+  try {
+    const r = await fetch(`${DEMO}/wallet`);
+    const w = await r.json();
+    if (w.address) {
+      document.getElementById('buyerAddr').innerHTML = `<a href="${w.explorerUrl}" target="_blank">${short(w.address, 8)}</a>`;
+      document.getElementById('buyerBal').textContent = Number(w.usdcBalance || 0).toFixed(4) + ' USDC';
+    }
+  } catch {
+    document.getElementById('buyerAddr').textContent = 'Not configured';
+  }
+}
+
+const buyerSession = requireBuyerSession();
+if (buyerSession) {
+  document.getElementById('apiKey').addEventListener('change', e => localStorage.setItem('gordon_buyer_api_key', e.target.value));
+  loadTreasury();
+  loadWallet();
+  loadProviders();
+  loadMarketplace();
+  refreshOps();
+  loadBuyerOnboarding();
+}
+</script>
+</body>
+</html>

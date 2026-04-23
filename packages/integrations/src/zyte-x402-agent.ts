@@ -107,7 +107,7 @@ export class ZyteX402Agent {
   }
 
   isReady(): boolean {
-    return this.ready && this.walletClient !== null && !!ZYTE_API_KEY;
+    return this.ready && this.walletClient !== null && !!(process.env.ZYTE_API_KEY || ZYTE_API_KEY);
   }
 
   getAgentAddress(): string | null {
@@ -115,7 +115,8 @@ export class ZyteX402Agent {
   }
 
   private authHeader(): string {
-    return 'Basic ' + Buffer.from(ZYTE_API_KEY + ':').toString('base64');
+    const key = process.env.ZYTE_API_KEY || ZYTE_API_KEY;
+    return 'Basic ' + Buffer.from(key + ':').toString('base64');
   }
 
   async getBalance(): Promise<{ eth: string; usdc: string } | null> {
@@ -229,14 +230,11 @@ export class ZyteX402Agent {
       const data = await response.json();
       console.log('[ZyteX402Agent] Scrape complete via Zyte API.');
 
-      // --- Step 2: Pay for the scrape with a real USDC transfer on Base ---
-      const txHash = await this.sendUsdcPayment(SCRAPE_COST_USDC);
-
+      // Payment is now handled by the x402 facilitator (Coinbase),
+      // not by the agent directly. The agent only scrapes.
       return {
         success: true,
         data,
-        baseTxHash: txHash || undefined,
-        paymentAmount: txHash ? `${SCRAPE_COST_USDC} USDC` : undefined,
         agentWallet: this.agentAddress || undefined,
       };
     } catch (err: any) {

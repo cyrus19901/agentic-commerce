@@ -255,12 +255,16 @@ export function createChatGPTAgentRoutes(
       let walletData = await db.getUserWallet(user.id);
       
       if (!walletData) {
-        // Create new wallet for user
+        const { generatePrivateKey, privateKeyToAccount } = await import('viem/accounts');
+        const evmPrivateKey = generatePrivateKey();
+        const evmAccount = privateKeyToAccount(evmPrivateKey);
         const keypair = Keypair.generate();
         walletData = {
           userId: user.id,
-          publicKey: keypair.publicKey.toBase58(),
-          secretKey: Array.from(keypair.secretKey),
+          evmAddress: evmAccount.address,
+          evmPrivateKey,
+          solanaPublicKey: keypair.publicKey.toBase58(),
+          solanaSecretKey: Array.from(keypair.secretKey),
         };
         await db.saveUserWallet(walletData);
       }
@@ -270,7 +274,7 @@ export function createChatGPTAgentRoutes(
         ? (process.env.SOLANA_RPC_MAINNET || 'https://api.mainnet-beta.solana.com')
         : (process.env.SOLANA_RPC_DEVNET || 'https://solana-devnet.g.alchemy.com/v2/ZJmVXF-LVxv651ws9azjqBr6Upv_l9_5');
       const connection = new Connection(rpcUrl, 'confirmed');
-      const publicKey = new PublicKey(walletData.publicKey);
+      const publicKey = new PublicKey(walletData.solanaPublicKey!);
       const { mint: usdcMint, ata } = getUsdcMintAndAta(network, publicKey);
       const tokenAccount = await ata;
       const tokenAccountB58 = tokenAccount.toBase58();
@@ -359,7 +363,7 @@ export function createChatGPTAgentRoutes(
       const clusterParam = network === 'mainnet-beta' ? '' : '?cluster=devnet';
       res.json({
         wallet: {
-          publicKey: walletData.publicKey,
+          publicKey: walletData.solanaPublicKey,
           tokenAccount: resolvedTokenAccountB58,
           usdcMint: usdcMint.toBase58(),
           network,
@@ -371,7 +375,7 @@ export function createChatGPTAgentRoutes(
           ...(balanceError && process.env.NODE_ENV !== 'production' && { balanceError }),
           ...(network !== 'mainnet-beta' && { solscanTokenAccountUrl: `https://solscan.io/account/${resolvedTokenAccountB58}${clusterParam}` }),
           fundingInstructions: {
-            sol: `Send SOL to: ${walletData.publicKey}`,
+            sol: `Send SOL to: ${walletData.solanaPublicKey}`,
             usdc: network === 'devnet'
               ? `Devnet USDC (mint ${usdcMint.toBase58()}): send to token account ${resolvedTokenAccountB58}`
               : `Send USDC to token account: ${resolvedTokenAccountB58}`,
@@ -493,15 +497,19 @@ export function createChatGPTAgentRoutes(
       // Get or create user's wallet
       let walletData = await db.getUserWallet(user.id);
       if (!walletData) {
-        // Auto-create wallet for user
+        const { generatePrivateKey, privateKeyToAccount } = await import('viem/accounts');
+        const evmPrivateKey = generatePrivateKey();
+        const evmAccount = privateKeyToAccount(evmPrivateKey);
         const keypair = Keypair.generate();
         walletData = {
           userId: user.id,
-          publicKey: keypair.publicKey.toBase58(),
-          secretKey: Array.from(keypair.secretKey),
+          evmAddress: evmAccount.address,
+          evmPrivateKey,
+          solanaPublicKey: keypair.publicKey.toBase58(),
+          solanaSecretKey: Array.from(keypair.secretKey),
         };
         await db.saveUserWallet(walletData);
-        console.log(`✅ Auto-created Solana wallet for user ${user.id}: ${walletData.publicKey}`);
+        console.log(`✅ Auto-created wallet for user ${user.id}: EVM ${evmAccount.address} + Solana ${walletData.solanaPublicKey}`);
       }
 
       // Get seller agent info
@@ -528,7 +536,7 @@ export function createChatGPTAgentRoutes(
         ? (process.env.SOLANA_RPC_MAINNET || 'https://api.mainnet-beta.solana.com')
         : (process.env.SOLANA_RPC_DEVNET || 'https://solana-devnet.g.alchemy.com/v2/ZJmVXF-LVxv651ws9azjqBr6Upv_l9_5');
       const balanceConnection = new Connection(balanceCheckRpc, 'confirmed');
-      const publicKey = new PublicKey(walletData.publicKey);
+      const publicKey = new PublicKey(walletData.solanaPublicKey!);
       const { mint: usdcMintAddress, ata: ataPromise } = getUsdcMintAndAta(balanceCheckNetwork, publicKey);
       const ata = await ataPromise;
       
@@ -1010,14 +1018,14 @@ export function createChatGPTAgentRoutes(
           error: 'INSUFFICIENT_FUNDS',
           message: `Insufficient USDC balance. You need ${priceUsd} USDC but have ${effectiveBalance.toFixed(2)} USDC.`,
           wallet: {
-            publicKey: useTreasuryPayer ? (loadTreasuryKeypair()?.publicKey.toBase58() || 'unknown') : walletData.publicKey,
+            publicKey: useTreasuryPayer ? (loadTreasuryKeypair()?.publicKey.toBase58() || 'unknown') : walletData.solanaPublicKey,
             tokenAccount: useTreasuryPayer ? (treasuryTokenAccount?.toBase58() || 'unknown') : resolvedTokenAccount.toBase58(),
             currentBalance: effectiveBalance,
             requiredAmount: priceUsd,
             fundingInstructions: {
               step1: useTreasuryPayer
                 ? 'Fund treasury wallet/subaccount balance via admin top-up path'
-                : `Fund your SOL wallet with ~0.01 SOL for transaction fees and rent: ${walletData.publicKey}`,
+                : `Fund your SOL wallet with ~0.01 SOL for transaction fees and rent: ${walletData.solanaPublicKey}`,
               step2: useTreasuryPayer
                 ? 'Increase treasury USDC available balance'
                 : `The USDC token account (ATA) will be auto-created on first USDC transfer`,
@@ -1088,7 +1096,7 @@ export function createChatGPTAgentRoutes(
 
       console.log(`🌐 Using Solana RPC: ${rpcUrl.substring(0, 50)}...`);
       const connection = new Connection(rpcUrl, 'confirmed');
-      const userKeypair = Keypair.fromSecretKey(Uint8Array.from(walletData.secretKey));
+      const userKeypair = Keypair.fromSecretKey(Uint8Array.from(walletData.solanaSecretKey!));
       const treasuryKeypair = useTreasuryPayer ? loadTreasuryKeypair() : null;
       const paymentKeypair = treasuryKeypair || userKeypair;
       const usdcMint = new PublicKey(requirement.mint);
@@ -1295,7 +1303,7 @@ export function createChatGPTAgentRoutes(
           payer: useTreasuryPayer ? 'treasury' : 'user-wallet',
         },
         wallet: {
-          publicKey: useTreasuryPayer ? paymentKeypair.publicKey.toBase58() : walletData.publicKey,
+          publicKey: useTreasuryPayer ? paymentKeypair.publicKey.toBase58() : walletData.solanaPublicKey,
           tokenAccount: useTreasuryPayer ? buyerTokenAccount.toBase58() : ata.toBase58(),
           previousBalance: effectiveBalance,
           paid: priceUsd,

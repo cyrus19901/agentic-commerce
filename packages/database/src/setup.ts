@@ -1015,8 +1015,166 @@ for (const product of products) {
   }
 }
 
+// ── Seed x402 Providers ──────────────────────────────────────────────────────
+console.log('\n🔌 Seeding x402 providers...');
+const providers = [
+  {
+    id: 'firecrawl',
+    name: 'Firecrawl',
+    type: 'hybrid',
+    endpoint: 'https://api.firecrawl.dev',
+    actions: JSON.stringify(['scrape', 'search']),
+    pricing: JSON.stringify({ scrape: 0.10, search: 0.10 }),
+    enabled: true,
+    wallet_address: '0xc9e0E7e333301445b5D0027ECB671Ec636BbE1f7',
+    supported_networks: JSON.stringify(['eip155:8453', 'eip155:84532']),
+    metadata: JSON.stringify({ description: 'Web scraping and search via x402 payments on Base' }),
+  },
+  {
+    id: 'zyte',
+    name: 'Zyte',
+    type: 'hybrid',
+    endpoint: 'https://api.zyte.com',
+    actions: JSON.stringify(['scrape']),
+    pricing: JSON.stringify({ scrape: 0.01 }),
+    enabled: true,
+    wallet_address: '0xc9e0E7e333301445b5D0027ECB671Ec636BbE1f7',
+    supported_networks: JSON.stringify(['eip155:8453', 'eip155:137', 'eip155:42161']),
+    metadata: JSON.stringify({ description: 'Web scraping with USDC payment — multi-chain settlement' }),
+  },
+  {
+    id: 'robtex',
+    name: 'Robtex',
+    type: 'x402',
+    endpoint: 'https://x402.robtex.com',
+    actions: JSON.stringify(['dns', 'ip']),
+    pricing: JSON.stringify({ dns: 0.005, ip: 0.005 }),
+    enabled: true,
+    wallet_address: '0x5D62c6970A411d881fAe99404beb7CDA11986f5e',
+    supported_networks: JSON.stringify(['eip155:8453']),
+    metadata: JSON.stringify({
+      description: 'DNS/IP lookup via pure x402 — no API key needed',
+      x402Native: true,
+      endpoints: { dns: 'https://x402.robtex.com/api/v1/dns/forward/{query}', ip: 'https://x402.robtex.com/api/v1/ip/info/{query}' },
+    }),
+  },
+  {
+    id: 'x402-direct',
+    name: 'x402.direct',
+    type: 'x402',
+    endpoint: 'https://x402.direct',
+    actions: JSON.stringify(['search']),
+    pricing: JSON.stringify({ search: 0.001 }),
+    enabled: true,
+    wallet_address: '0x6106AC5cD77f1B9F486550Ce90f8738BD63848B9',
+    supported_networks: JSON.stringify(['eip155:8453']),
+    metadata: JSON.stringify({
+      description: 'x402 service directory search — no API key needed',
+      x402Native: true,
+      endpoints: { search: 'https://x402.direct/api/search?q={query}' },
+    }),
+  },
+];
+
+for (const p of providers) {
+  try {
+    await db.pool.query(
+      `INSERT INTO providers (id, name, type, endpoint, actions, pricing, enabled, wallet_address, supported_networks, metadata, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, endpoint = EXCLUDED.endpoint,
+         actions = EXCLUDED.actions, pricing = EXCLUDED.pricing,
+         wallet_address = EXCLUDED.wallet_address, supported_networks = EXCLUDED.supported_networks,
+         metadata = EXCLUDED.metadata, updated_at = EXCLUDED.updated_at`,
+      [p.id, p.name, p.type, p.endpoint, p.actions, p.pricing, p.enabled, p.wallet_address, p.supported_networks, p.metadata, timestamp, timestamp],
+    );
+    console.log(`✓ Seeded provider: ${p.name}`);
+  } catch (e) {
+    console.log(`Error seeding provider ${p.name}:`, e);
+  }
+}
+
+// ── Seed Demo Organization + API Key ─────────────────────────────────────────
+console.log('\n🏢 Seeding demo organization and API key...');
+const DEMO_ORG_ID = 'org-demo-001';
+const DEMO_API_KEY_RAW = 'ak_demo_live_test_key_2024';
+const { createHash } = await import('crypto');
+const DEMO_API_KEY_HASH = createHash('sha256').update(DEMO_API_KEY_RAW).digest('hex');
+
+try {
+  await db.pool.query(
+    `INSERT INTO organizations (id, name, slug, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'active', $4, $5)
+     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, updated_at = EXCLUDED.updated_at`,
+    [DEMO_ORG_ID, 'Demo Organization', 'demo-org', timestamp, timestamp],
+  );
+  console.log('✓ Demo organization ready');
+
+  await db.pool.query(
+    `INSERT INTO api_keys (id, org_id, key_hash, key_prefix, name, scopes, rate_limit, enabled, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8)
+     ON CONFLICT (key_hash) DO UPDATE SET name = EXCLUDED.name, enabled = true`,
+    [
+      'apikey-demo-001', DEMO_ORG_ID, DEMO_API_KEY_HASH, 'ak_demo_',
+      'Demo API Key', '["*"]', 1000, timestamp,
+    ],
+  );
+  console.log(`✓ Demo API key ready: ${DEMO_API_KEY_RAW}`);
+
+  // Ensure demo org has a treasury account
+  const treasury = await db.createOrGetOrgTreasuryAccount(DEMO_ORG_ID);
+  console.log(`✓ Demo treasury: $${treasury.balanceAvailable} available`);
+
+  // Assign all policies to the demo org
+  for (const policy of defaultPolicies) {
+    try {
+      await db.pool.query(
+        'UPDATE policies SET org_id = $1 WHERE id = $2 AND org_id IS NULL',
+        [DEMO_ORG_ID, policy.id],
+      );
+    } catch (_) {}
+  }
+  console.log(`✓ Assigned ${defaultPolicies.length} policies to demo org`);
+} catch (e) {
+  console.log('Error seeding demo org/key:', e);
+}
+
+// ── Seed Sandbox Organization + Test API Key ─────────────────────────────────
+const SANDBOX_ORG_ID = 'org-sandbox-000';
+const SANDBOX_API_KEY_RAW = 'ak_test_sandbox_key_2024';
+const SANDBOX_API_KEY_HASH = createHash('sha256').update(SANDBOX_API_KEY_RAW).digest('hex');
+
+try {
+  await db.pool.query(
+    `INSERT INTO organizations (id, name, slug, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'active', $4, $5) ON CONFLICT (id) DO NOTHING`,
+    [SANDBOX_ORG_ID, 'Sandbox Organization', 'sandbox', timestamp, timestamp],
+  );
+  await db.pool.query(
+    `INSERT INTO api_keys (id, org_id, key_hash, key_prefix, name, scopes, rate_limit, enabled, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8) ON CONFLICT (id) DO NOTHING`,
+    [
+      'apikey-sandbox-001', SANDBOX_ORG_ID, SANDBOX_API_KEY_HASH, 'ak_test_',
+      'Sandbox Test Key', '["*"]', 1000, timestamp,
+    ],
+  );
+  const sandboxTreasury = await db.createOrGetOrgTreasuryAccount(SANDBOX_ORG_ID);
+  if (sandboxTreasury.balanceAvailable < 1000) {
+    await db.topUpOrgTreasury({
+      orgId: SANDBOX_ORG_ID, amount: 1000, currency: 'USDC',
+      referenceType: 'seed', referenceId: 'sandbox-seed',
+      idempotencyKey: 'sandbox-seed-initial',
+    });
+  }
+  console.log(`✓ Sandbox API key ready: ${SANDBOX_API_KEY_RAW}`);
+} catch (e) {
+  console.log('Error seeding sandbox org:', e);
+}
+
 console.log('\n✅ Database setup complete!');
 console.log(`✓ Seeded ${defaultPolicies.length} policies`);
 console.log(`✓ Seeded ${agents.length} agents`);
 console.log(`✓ Seeded ${products.length} products`);
+console.log(`✓ Seeded ${providers.length} providers`);
+console.log(`✓ Demo API key (live): ${DEMO_API_KEY_RAW}`);
+console.log(`✓ Sandbox API key (test): ${SANDBOX_API_KEY_RAW}`);
 })();
