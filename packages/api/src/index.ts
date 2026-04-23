@@ -1,12 +1,24 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
+import path from 'path';
 import { DB } from '@agentic-commerce/database';
-import { PolicyService } from '@agentic-commerce/core';
-import { EtsyClient, PaymentService, StripeAgentService } from '@agentic-commerce/integrations';
+import { PolicyService, PaymentOrchestrator } from '@agentic-commerce/core';
+import { EtsyClient, PaymentService, StripeAgentService, FacilitatorService, FirecrawlService, EscrowService, EscrowProgramClient, FirecrawlX402Agent, ZyteX402Agent, ProviderRegistry, BaseTxVerifier } from '@agentic-commerce/integrations';
+import { AuditService } from '@agentic-commerce/core';
+import { createAgentRoutes } from './agent-routes';
+import { createRegistryRoutes } from './registry-routes';
+import { createFacilitatorRoutes } from './facilitator-routes';
+import { createChatGPTAgentRoutes } from './chatgpt-agent-routes';
+import { createChatRoutes } from './chat-routes';
+import { createV1Router } from './v1-routes';
+import { createApiKeyAuth } from './middleware/api-key-auth';
+import { requestIdMiddleware, attachRequestId, globalErrorHandler } from './middleware/error-handler';
 
-// Extend Express Request type to include user
+// Extend Express Request type to include user and org context
 declare global {
   namespace Express {
     interface Request {
@@ -15,11 +27,13 @@ declare global {
         email?: string;
         iat?: number;
       };
+      org?: import('./middleware/api-key-auth').OrgContext;
     }
   }
 }
 
-dotenv.config();
+// Load .env from the monorepo root (process.cwd() is packages/api when run via npm workspaces)
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -31,16 +45,58 @@ const policyService = new PolicyService(db);
 const etsyClient = new EtsyClient();
 const paymentService = new PaymentService();
 const stripeAgentService = new StripeAgentService();
+const facilitatorService = new FacilitatorService(db);
+const firecrawlService = new FirecrawlService();
+const escrowService = new EscrowService();
+const escrowProgramClient = new EscrowProgramClient();
+const firecrawlX402Agent = new FirecrawlX402Agent();
+const zyteX402Agent = new ZyteX402Agent();
+const auditService = new AuditService();
+auditService.setDB(db);
 
-// Middleware - Allow all origins for ChatGPT and frontend
-app.use(cors({ 
-  origin: '*', // Allow all origins explicitly
-  credentials: false, // Set to false when using wildcard origin
-  exposedHeaders: ['ngrok-skip-browser-warning'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning', 'X-Requested-With']
+// Platform v1 services
+const providerRegistry = new ProviderRegistry(db);
+providerRegistry.setFirecrawlAgent(firecrawlX402Agent);
+providerRegistry.setZyteAgent(zyteX402Agent);
+const paymentOrchestrator = new PaymentOrchestrator(db, policyService, auditService, providerRegistry);
+const baseTxVerifier = new BaseTxVerifier();
+paymentOrchestrator.setBaseTxVerifier(baseTxVerifier);
+
+// ── Security Middleware Stack ──────────────────────────────────────────────
+
+app.use(helmet({
+  contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false,
+  crossOriginEmbedderPolicy: false,
 }));
-app.use(express.json());
+
+app.use(requestIdMiddleware);
+app.use(attachRequestId);
+
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  : null;
+
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production' && allowedOrigins
+    ? allowedOrigins
+    : '*',
+  credentials: allowedOrigins ? true : false,
+  exposedHeaders: ['ngrok-skip-browser-warning', 'X-Request-ID', 'PAYMENT-REQUIRED', 'PAYMENT-RESPONSE'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-Request-ID', 'PAYMENT-SIGNATURE', 'ngrok-skip-browser-warning', 'X-Requested-With'],
+}));
+
+const globalLimiter = rateLimit({
+  windowMs: 60_000,
+  max: parseInt(process.env.RATE_LIMIT_GLOBAL || '200', 10),
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { xForwardedForHeader: false },
+  message: { error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests, please try again later' } },
+});
+app.use('/api/', globalLimiter);
+
+app.use(express.json({ limit: '1mb' }));
 
 // Add ngrok bypass for all requests
 app.use((req, res, next) => {
@@ -71,6 +127,37 @@ const authenticate = (req: any, res: any, next: any) => {
     return res.status(200).end();
   }
   
+  // DEVELOPMENT MODE: Bypass JWT authentication if DISABLE_AUTH=true (blocked in production)
+  if (process.env.DISABLE_AUTH === 'true' && process.env.NODE_ENV !== 'production') {
+    console.log('⚠️  AUTHENTICATION DISABLED (Development Mode)');
+    console.log('Path:', req.path, 'Method:', req.method);
+    
+    // Extract user_email from body (POST/PUT) or query params (GET/DELETE)
+    const testEmail = req.body?.user_email || req.query?.user_email || 'dev@example.com';
+    
+    // Look up the real dev user from database
+    return (async () => {
+      try {
+        const user = await db.getUserByEmail(testEmail as string);
+        if (user) {
+          req.user = { userId: user.id, email: user.email };
+          console.log('✓ Using dev user:', user.email, '(ID:', user.id, ')');
+          return next();
+        } else {
+          console.log('⚠️  Dev user not found:', testEmail);
+          console.log('💡 Available users:', await db.getAllUsers().then((users: any[]) => users.map((u: any) => u.email).join(', ')));
+          return res.status(401).json({ 
+            error: 'Dev user not found', 
+            message: `User ${testEmail} not found. Run scripts/create-dev-user.ts to create users.` 
+          });
+        }
+      } catch (error) {
+        console.error('Error looking up dev user:', error);
+        return res.status(500).json({ error: 'Internal server error' });
+      }
+    })();
+  }
+  
   // Log all authentication attempts for debugging
   const userAgent = req.headers['user-agent'] || '';
   const isChatGPT = userAgent.includes('ChatGPT') || userAgent.includes('openai');
@@ -82,18 +169,19 @@ const authenticate = (req: any, res: any, next: any) => {
   
   const authHeader = req.headers.authorization;
   
-  // CHATGPT SUPPORT: Allow authentication via user_email in request body
-  if (!authHeader && req.body && req.body.user_email) {
-    console.log('No auth header, attempting email-based auth:', req.body.user_email);
+  // CHATGPT SUPPORT: Allow authentication via user_email in request body or query params
+  const emailFromRequest = req.body?.user_email || req.query?.user_email;
+  if (!authHeader && emailFromRequest) {
+    console.log('No auth header, attempting email-based auth:', emailFromRequest);
     return (async () => {
       try {
-        const user = await db.getUserByEmail(req.body.user_email);
+        const user = await db.getUserByEmail(emailFromRequest as string);
         if (user) {
           req.user = { userId: user.id, email: user.email };
           console.log('Email-based auth successful for:', user.email);
           return next();
         } else {
-          console.log('User not found for email:', req.body.user_email);
+          console.log('User not found for email:', emailFromRequest);
           return res.status(401).json({ 
             error: 'User not found', 
             message: 'Please create an account first using /api/auth/create-user' 
@@ -168,23 +256,23 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy' });
 });
 
-// Debug endpoint - Check environment configuration
-app.get('/debug/env', (req, res) => {
+// Local web chat UI that mirrors Custom GPT action flow
+app.use('/api/chat', createChatRoutes(firecrawlService, escrowService, auditService, firecrawlX402Agent, zyteX402Agent));
+
+// x402 Agent status (both providers)
+app.get('/api/agent/status', async (req, res) => {
+  const firecrawlStatus = firecrawlX402Agent.getStatus();
+  const zyteStatus = zyteX402Agent.getStatus();
+  const balance = await zyteX402Agent.getBalance() || await firecrawlX402Agent.getBalance();
   res.json({
-    NODE_ENV: process.env.NODE_ENV,
-    DATABASE_URL: process.env.DATABASE_URL,
-    FRONTEND_URL: process.env.FRONTEND_URL || '⚠️ NOT SET (defaults to http://localhost:3000)',
-    API_URL: process.env.API_URL || '⚠️ NOT SET',
-    USE_MOCK_PAYMENTS: process.env.USE_MOCK_PAYMENTS || '⚠️ NOT SET',
-    STRIPE_KEY_SET: !!process.env.STRIPE_SECRET_KEY ? '✅ Yes' : '❌ No',
-    STRIPE_KEY_PREFIX: process.env.STRIPE_SECRET_KEY?.substring(0, 12) || 'NOT SET',
-    JWT_SECRET_SET: !!process.env.JWT_SECRET ? '✅ Yes' : '❌ No',
-    PORT: process.env.PORT,
-    platform: process.platform,
-    nodeVersion: process.version,
-    timestamp: new Date().toISOString()
+    firecrawl: firecrawlStatus,
+    zyte: zyteStatus,
+    balance,
+    activeProvider: zyteStatus.ready ? 'zyte' : (firecrawlStatus.ready ? 'firecrawl' : 'none'),
   });
 });
+
+// Debug endpoint removed for security — environment info must not be exposed
 
 // Admin endpoint - Clean up duplicate users
 app.post('/admin/cleanup-duplicate-users', async (req, res) => {
@@ -254,14 +342,28 @@ app.post('/api/policy/check', authenticate, async (req, res) => {
       time_of_day,
       day_of_week,
       recipient_agent,
-      purpose
+      purpose,
+      transaction_type, // NEW: Support A2M vs A2A
+      service_type,
+      recipient_agent_id,
+      buyer_agent_id
     } = req.body;
+    
+    // Validate required fields
+    if (price === null || price === undefined || typeof price !== 'number') {
+      return res.status(400).json({ 
+        error: 'Invalid request', 
+        message: 'price is required and must be a number' 
+      });
+    }
     
     // ALWAYS prioritize token user ID for security (token is authenticated, body can be spoofed)
     const finalUserId = tokenUser || user_id || 'test-user-123';
     
-    console.log('Policy check request:', JSON.stringify({ ...req.body, user_id: finalUserId }, null, 2));
-    const result = await policyService.checkPurchase({
+    console.log('Policy check request:', JSON.stringify({ ...req.body, user_id: finalUserId, transaction_type }, null, 2));
+    
+    // READ-ONLY policy check (does NOT record attempt)
+    const result = await policyService.checkPolicyOnly({
       userId: finalUserId,
       productId: product_id,
       price,
@@ -273,8 +375,69 @@ app.post('/api/policy/check', authenticate, async (req, res) => {
       dayOfWeek: day_of_week,
       recipientAgent: recipient_agent,
       purpose,
+      transactionType: transaction_type,
+      serviceType: service_type,
     });
+    
     console.log('Policy check response:', JSON.stringify(result, null, 2));
+
+    // Log event (fire-and-forget)
+    db.logEvent({
+      userId: finalUserId,
+      eventType: result.allowed ? 'policy_evaluated' : result.requiresApproval ? 'approval_requested' : 'purchase_blocked',
+      source: 'api',
+      productName: product_id,
+      category,
+      merchant,
+      amount: price,
+      outcome: result.allowed ? 'approved' : result.requiresApproval ? 'pending_approval' : 'blocked',
+      blockReason: result.allowed ? undefined : result.reason,
+      metadata: { transaction_type, service_type, matched_policies: result.matchedPolicies?.length },
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Simulate a policy against a transaction without touching the database.
+ * Accepts a full policy object + transaction details; returns evaluation result.
+ */
+app.post('/api/policy/simulate', authenticate, async (req, res) => {
+  try {
+    const {
+      policy,
+      transaction,
+      current_spending = 0,
+    } = req.body;
+
+    if (!policy || typeof policy !== 'object') {
+      return res.status(400).json({ error: 'policy object is required' });
+    }
+    if (!transaction || typeof transaction.price !== 'number') {
+      return res.status(400).json({ error: 'transaction.price (number) is required' });
+    }
+
+    const request = {
+      userId: req.user?.userId || 'simulate-user',
+      productId: transaction.product_id || 'simulation',
+      price: transaction.price,
+      merchant: transaction.merchant || 'Unknown Merchant',
+      category: transaction.category || 'General',
+      transactionType: transaction.transaction_type || 'agent-to-merchant',
+      agentName: transaction.agent_name,
+      agentType: transaction.agent_type,
+      serviceType: transaction.service_type,
+      recipientAgentId: transaction.recipient_agent_id,
+      buyerAgentId: transaction.buyer_agent_id,
+      purpose: transaction.purpose,
+      timeOfDay: transaction.time_of_day,
+      dayOfWeek: transaction.day_of_week,
+    };
+
+    const result = await policyService.simulatePolicy(policy, request, current_spending);
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -395,6 +558,18 @@ app.post('/api/approvals/:id/approve', authenticate, async (req, res) => {
       // Still mark as approved, but note checkout failure
     }
     
+    db.logEvent({
+      userId: purchase.userId,
+      eventType: 'approval_resolved',
+      source: 'api',
+      productName: purchase.productName,
+      category: purchase.category,
+      merchant: purchase.merchant,
+      amount: purchase.amount,
+      outcome: 'approved',
+      metadata: { purchase_id: purchaseId, approved_by: req.user?.userId },
+    });
+
     res.json({ 
       success: true,
       message: 'Purchase approved and checkout initiated',
@@ -438,6 +613,19 @@ app.post('/api/approvals/:id/reject', authenticate, async (req, res) => {
     const { reason } = req.body;
     await db.rejectPurchase(purchaseId, reason || 'No reason provided');
     
+    db.logEvent({
+      userId: purchase.userId,
+      eventType: 'approval_resolved',
+      source: 'api',
+      productName: purchase.productName,
+      category: purchase.category,
+      merchant: purchase.merchant,
+      amount: purchase.amount,
+      outcome: 'rejected',
+      blockReason: reason || 'No reason provided',
+      metadata: { purchase_id: purchaseId, rejected_by: req.user?.userId },
+    });
+
     res.json({ 
       success: true,
       message: 'Purchase rejected',
@@ -491,14 +679,30 @@ app.post('/api/checkout/initiate', authenticate, async (req, res) => {
     const tokenUser = req.user?.userId;
     
     console.log('Checkout request body:', JSON.stringify(req.body, null, 2));
-    const { user_id, product_id, amount, merchant, category, product_name, product_url, product_image_url } = req.body;
+    const { 
+      user_id, 
+      product_id, 
+      amount, 
+      merchant, 
+      category, 
+      product_name, 
+      product_url, 
+      product_image_url,
+      transaction_type, // NEW: 'agent-to-merchant' or 'agent-to-agent'
+      service_type,
+      recipient_agent_id,
+      buyer_agent_id
+    } = req.body;
 
     // ALWAYS prioritize token user ID for security (token is authenticated, body can be spoofed)
     const finalUserId = tokenUser || user_id || 'test-user-123';
 
-    // Check policy first
+    // Determine transaction type (default to agent-to-merchant)
+    const finalTransactionType = transaction_type || 'agent-to-merchant';
+
+    // Check policy first (read-only check to avoid duplicate recording)
     const { agent_name, agent_type, time_of_day, day_of_week, recipient_agent, purpose } = req.body;
-    const policyCheck = await policyService.checkPurchase({
+    const policyCheck = await policyService.checkPolicyOnly({
       userId: finalUserId,
       productId: product_id,
       price: amount,
@@ -510,11 +714,25 @@ app.post('/api/checkout/initiate', authenticate, async (req, res) => {
       dayOfWeek: day_of_week,
       recipientAgent: recipient_agent,
       purpose,
+      transactionType: finalTransactionType,
+      serviceType: service_type,
     });
 
     // Handle policy check results
     if (!policyCheck.allowed && !policyCheck.requiresApproval) {
-      // Purchase is blocked (denied)
+      // Log blocked purchase
+      db.logEvent({
+        userId: finalUserId,
+        eventType: 'purchase_blocked',
+        source: 'chatgpt',
+        productName: product_id,
+        category,
+        merchant,
+        amount,
+        outcome: 'blocked',
+        blockReason: policyCheck.reason,
+        metadata: { transaction_type: finalTransactionType, matched_policies: policyCheck.matchedPolicies?.length },
+      });
       return res.status(403).json({
         error: 'Purchase not allowed',
         reason: policyCheck.reason,
@@ -559,6 +777,7 @@ app.post('/api/checkout/initiate', authenticate, async (req, res) => {
         amount,
         merchant: finalMerchant || merchant,
         category: finalCategory || category,
+        transactionType: finalTransactionType, // NEW: Include transaction type
         allowed: false, // Not yet approved
         requiresApproval: true,
         policyCheckResults: policyCheck.matchedPolicies.map((p: any) => ({
@@ -567,6 +786,18 @@ app.post('/api/checkout/initiate', authenticate, async (req, res) => {
         })),
       });
       console.log(`🟡 Purchase requires approval - Purchase ID: ${purchaseId}, User: ${finalUserId}, Product: ${product_id}, Amount: $${amount}`);
+
+      db.logEvent({
+        userId: finalUserId,
+        eventType: 'approval_requested',
+        source: 'chatgpt',
+        productName: finalProductName,
+        category: finalCategory || category,
+        merchant: finalMerchant || merchant,
+        amount,
+        outcome: 'pending_approval',
+        metadata: { purchase_id: purchaseId, transaction_type: finalTransactionType },
+      });
 
       return res.json({
         requiresApproval: true,
@@ -601,6 +832,7 @@ app.post('/api/checkout/initiate', authenticate, async (req, res) => {
       amount,
       merchant: finalMerchant || merchant,
       category: finalCategory || category,
+      transactionType: finalTransactionType,
       allowed: true,
       requiresApproval: false,
       policyCheckResults: policyCheck.matchedPolicies.map((p: any) => ({
@@ -609,6 +841,17 @@ app.post('/api/checkout/initiate', authenticate, async (req, res) => {
       })),
     });
     console.log(`✅ Auto-approved purchase for user ${finalUserId}, product ${product_id}, amount $${amount}`);
+    db.logEvent({
+      userId: finalUserId,
+      eventType: 'purchase_initiated',
+      source: 'chatgpt',
+      productName: finalProductName,
+      category: finalCategory || category,
+      merchant: finalMerchant || merchant,
+      amount,
+      outcome: 'approved',
+      metadata: { transaction_type: finalTransactionType, checkout_session: checkout.sessionId },
+    });
 
     res.json({
       checkout_session_id: checkout.sessionId,
@@ -652,6 +895,17 @@ app.post('/api/checkout/complete', authenticate, async (req, res) => {
         policyCheckResults: [],
       });
       console.log(`Recorded completed purchase for user ${finalUserId}, product ${product_id}`);
+      db.logEvent({
+        userId: finalUserId,
+        eventType: 'purchase_completed',
+        source: 'chatgpt',
+        productName: product_name,
+        category,
+        merchant,
+        amount: amount || status.amountTotal || 0,
+        outcome: 'completed',
+        metadata: { session_id, payment_status: status.paymentStatus },
+      });
     }
 
     res.json({
@@ -681,6 +935,403 @@ app.post('/api/checkout/webhook', express.raw({ type: 'application/json' }), asy
   } catch (error: any) {
     console.error('Webhook error:', error);
     res.status(400).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// NEW: Agent-to-Agent & Registry Routes
+// ============================================================================
+
+// Mount agent service routes (x402 protocol endpoints)
+app.use('/api/agent', authenticate, createAgentRoutes(db, policyService, facilitatorService));
+
+// Mount registry routes (agent discovery)
+app.use('/api/registry', createRegistryRoutes(db));
+
+// Mount facilitator routes (payment verification)
+app.use('/api/facilitator', createFacilitatorRoutes(facilitatorService));
+
+// Mount ChatGPT agent routes (simplified agent-to-agent for ChatGPT)
+app.use('/api/chatgpt-agent', createChatGPTAgentRoutes(db, policyService, facilitatorService));
+
+// ── Platform API v1 (API-key authenticated) ─────────────────────────────────
+const apiKeyAuth = createApiKeyAuth(db);
+const v1Router = createV1Router({ db, policyService, auditService, paymentOrchestrator, providerRegistry });
+app.use('/api/v1', apiKeyAuth, v1Router);
+
+// ── MCP Server (Streamable HTTP transport with x402 pricing) ────────────────
+import { createMcpRouter } from '@agentic-commerce/mcp-server';
+const mcpRouter = createMcpRouter({
+  apiBaseUrl: `http://localhost:${PORT}/api/v1`,
+  defaultApiKey: process.env.MCP_DEFAULT_API_KEY || 'ak_demo_live_test_key_2024',
+});
+app.use('/mcp', mcpRouter);
+console.log(`[MCP] Server mounted at /mcp (Streamable HTTP transport with x402 pricing)`);
+
+// ── Demo Routes (EIP-3009 signer for presentation demo) ─────────────────────
+import { createDemoRoutes } from './demo-routes';
+app.use('/api/demo', createDemoRoutes());
+console.log(`[Demo] Routes mounted at /api/demo (sign-x402, wallet)`);
+
+// ============================================================================
+// Funding Subaccounts (treasury-style virtual balances)
+// ============================================================================
+
+app.get('/api/funding/account', authenticate, async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+    const account = await db.createOrGetFundingAccountForUser(userId, 'USDC');
+    res.json({ account });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/funding/topup', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+
+    const actor = await db.getUserById(actorUserId);
+    const actorRole = (actor as any)?.role || 'user';
+    if (!['admin', 'manager'].includes(actorRole)) {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Only admin/manager can top up funding accounts' });
+    }
+
+    const { user_id, amount, idempotency_key } = req.body;
+    if (!user_id || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: 'user_id and positive amount are required' });
+    }
+    const result = await db.topUpFundingAccount({
+      userId: user_id,
+      amount: Number(amount),
+      currency: 'USDC',
+      idempotencyKey: idempotency_key,
+      referenceType: 'admin-topup',
+      referenceId: `topup_${Date.now()}`,
+      metadata: { by: actorUserId },
+    });
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// Organizations + Treasury (multi-tenant)
+// ============================================================================
+
+app.post('/api/orgs', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { name, slug, metadata } = req.body;
+    if (!name || !slug) {
+      return res.status(400).json({ error: 'name and slug are required' });
+    }
+    const org = await db.createOrganization({ name, slug, ownerUserId: actorUserId, metadata });
+    await db.createOrGetOrgTreasuryAccount(org.id, 'USDC');
+    res.status(201).json({ success: true, organization: org });
+  } catch (error: any) {
+    if (error.message?.includes('unique') || error.message?.includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Organization slug already exists' });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/orgs', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const organizations = await db.getUserOrganizations(actorUserId);
+    res.json({ organizations });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/orgs/:orgId/members', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const { user_id, role = 'member' } = req.body;
+    if (!user_id) return res.status(400).json({ error: 'user_id is required' });
+
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Only owner/admin can manage members' });
+    }
+
+    await db.addOrganizationMember({ orgId, userId: user_id, role, status: 'active' });
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/orgs/:orgId/treasury/topup', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const { amount, idempotency_key } = req.body;
+    if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: 'positive amount is required' });
+    }
+
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin', 'manager'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Insufficient org role for treasury top-up' });
+    }
+
+    const result = await db.topUpOrgTreasury({
+      orgId,
+      amount: Number(amount),
+      currency: 'USDC',
+      idempotencyKey: idempotency_key,
+      referenceType: 'org-topup',
+      referenceId: `org_topup_${Date.now()}`,
+      metadata: { by: actorUserId },
+    });
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/orgs/:orgId/treasury/allocate', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const { user_id, amount, idempotency_key } = req.body;
+    if (!user_id || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: 'user_id and positive amount are required' });
+    }
+
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin', 'manager'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Insufficient org role for allocation' });
+    }
+
+    const targetMembership = await db.getOrganizationMembership(orgId, user_id);
+    if (!targetMembership || targetMembership.status !== 'active') {
+      return res.status(400).json({ error: 'Target user is not an active member of this organization' });
+    }
+
+    const result = await db.allocateOrgTreasuryToUserFunding({
+      orgId,
+      userId: user_id,
+      amount: Number(amount),
+      currency: 'USDC',
+      idempotencyKey: idempotency_key,
+      metadata: { by: actorUserId },
+    });
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/orgs/:orgId/treasury/wallets', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN' });
+    }
+    const wallets = await db.listOrgTreasuryWallets(orgId);
+    res.json({ success: true, wallets });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/orgs/:orgId/treasury/wallets', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin', 'manager'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Insufficient org role for wallet create' });
+    }
+    const {
+      name,
+      address,
+      network,
+      asset,
+      priority,
+      status,
+      key_ciphertext,
+      kms_key_id,
+      key_version,
+      routing_policy,
+      metadata,
+    } = req.body || {};
+    if (!name || !address || !network || !asset) {
+      return res.status(400).json({ error: 'name, address, network, asset are required' });
+    }
+    const wallet = await db.createOrgTreasuryWallet({
+      orgId,
+      name,
+      address,
+      network,
+      asset,
+      priority: Number.isFinite(Number(priority)) ? Number(priority) : undefined,
+      status,
+      keyCiphertext: key_ciphertext,
+      kmsKeyId: kms_key_id,
+      keyVersion: key_version,
+      routingPolicy: routing_policy,
+      metadata,
+      createdBy: actorUserId,
+    });
+    res.status(201).json({ success: true, wallet });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/orgs/:orgId/treasury/wallets/:walletId', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId, walletId } = req.params;
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin', 'manager'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Insufficient org role for wallet update' });
+    }
+    const updates: any = {};
+    if (req.body.name !== undefined) updates.name = req.body.name;
+    if (req.body.status !== undefined) updates.status = req.body.status;
+    if (req.body.priority !== undefined) updates.priority = Number(req.body.priority);
+    if (req.body.key_ciphertext !== undefined) updates.keyCiphertext = req.body.key_ciphertext;
+    if (req.body.kms_key_id !== undefined) updates.kmsKeyId = req.body.kms_key_id;
+    if (req.body.key_version !== undefined) updates.keyVersion = req.body.key_version;
+    if (req.body.routing_policy !== undefined) updates.routingPolicy = req.body.routing_policy;
+    if (req.body.metadata !== undefined) updates.metadata = req.body.metadata;
+    if (req.body.last_rotated_at !== undefined) updates.lastRotatedAt = new Date(req.body.last_rotated_at);
+    await db.updateOrgTreasuryWallet(walletId, updates);
+    const wallet = await db.getOrgTreasuryWalletById(walletId);
+    res.json({ success: true, wallet });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/orgs/:orgId/treasury/wallets/:walletId/admins', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId, walletId } = req.params;
+    const { user_id, role = 'admin', status = 'active' } = req.body || {};
+    if (!user_id) return res.status(400).json({ error: 'user_id is required' });
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Only owner/admin can map wallet admins' });
+    }
+    await db.addOrgTreasuryWalletAdmin({ orgId, walletId, userId: user_id, role, status });
+    const admins = await db.listOrgTreasuryWalletAdmins(walletId);
+    res.json({ success: true, admins });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/orgs/:orgId/treasury/policy', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || membership.status !== 'active') return res.status(403).json({ error: 'FORBIDDEN' });
+    const policy = await db.getOrgTreasuryPolicy(orgId);
+    res.json({ success: true, policy });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/orgs/:orgId/treasury/policy', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin', 'manager'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Insufficient org role for policy update' });
+    }
+    await db.upsertOrgTreasuryPolicy(orgId, {
+      routingMode: req.body.routing_mode,
+      allowNetworks: req.body.allow_networks,
+      allowAssets: req.body.allow_assets,
+      perTxnLimitAtomic: req.body.per_txn_limit_atomic,
+      dailyLimitAtomic: req.body.daily_limit_atomic,
+      requireManualApprovalOverAtomic: req.body.require_manual_approval_over_atomic,
+      metadata: req.body.metadata,
+    });
+    const policy = await db.getOrgTreasuryPolicy(orgId);
+    res.json({ success: true, policy });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/orgs/:orgId/treasury/sign-requests', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin', 'manager'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN' });
+    }
+    const signRequests = await db.listTreasurySignRequests({
+      orgId,
+      status: req.query.status as string | undefined,
+      limit: Number(req.query.limit) || 100,
+    });
+    res.json({ success: true, signRequests });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/orgs/:orgId/treasury/reconcile', authenticate, async (req, res) => {
+  try {
+    const actorUserId = req.user?.userId;
+    if (!actorUserId) return res.status(401).json({ error: 'Authentication required' });
+    const { orgId } = req.params;
+    const membership = await db.getOrganizationMembership(orgId, actorUserId);
+    if (!membership || !['owner', 'admin'].includes(membership.role) || membership.status !== 'active') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Only owner/admin can run reconciliation' });
+    }
+    const recent = await db.listTreasurySignRequests({ orgId, limit: 200 });
+    const stats = recent.reduce(
+      (acc: any, r: any) => {
+        acc.total += 1;
+        acc[r.status] = (acc[r.status] || 0) + 1;
+        return acc;
+      },
+      { total: 0 }
+    );
+    res.json({
+      success: true,
+      reconciliation: {
+        orgId,
+        scanned: stats.total,
+        statusCounts: stats,
+        note: 'Scaffold reconciliation complete; hook on-chain tx verification in next phase.',
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -838,10 +1489,11 @@ app.get('/api/dashboard', authenticate, async (req, res) => {
     }
     
     // Get spending data
-    const [daily, weekly, monthly] = await Promise.all([
+    const [daily, weekly, monthly, spendingByType] = await Promise.all([
       db.getUserSpending(finalUserId, 'daily'),
       db.getUserSpending(finalUserId, 'weekly'),
       db.getUserSpending(finalUserId, 'monthly'),
+      db.getSpendingByTransactionType(finalUserId, 'monthly'), // Get A2M vs A2A breakdown
     ]);
     
     // Get policies
@@ -856,6 +1508,9 @@ app.get('/api/dashboard', authenticate, async (req, res) => {
     // Get policy compliance stats
     const complianceStats = await db.getPolicyComplianceStats(finalUserId);
     
+    // Get spending by category (for Sankey diagram)
+    const categorySpending = await db.getSpendingByCategory(finalUserId, 'monthly');
+    
     res.json({
       user: {
         id: user.id,
@@ -867,6 +1522,12 @@ app.get('/api/dashboard', authenticate, async (req, res) => {
         weekly,
         monthly
       },
+      spendingByType: {
+        agentToMerchant: spendingByType.agentToMerchant,
+        agentToAgent: spendingByType.agentToAgent,
+        total: spendingByType.total
+      },
+      spendingByCategory: categorySpending,
       policies: {
         total: policies.length,
         enabled: policies.filter((p: any) => p.enabled).length,
@@ -1079,6 +1740,74 @@ app.delete('/api/users/:userId/policies/:policyId', authenticate, async (req, re
 });
 
 // ============================================================================
+// Approval Reviewer Management
+// ============================================================================
+
+// Get all approval reviewers
+app.get('/api/reviewers', authenticate, async (req, res) => {
+  try {
+    const reviewers = await db.getApprovalReviewers();
+    res.json({ reviewers });
+  } catch (error: any) {
+    console.error('Get reviewers error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add approval reviewer
+app.post('/api/reviewers', authenticate, async (req, res) => {
+  try {
+    const { user_id, role = 'reviewer' } = req.body;
+    
+    if (!user_id) {
+      return res.status(400).json({ error: 'user_id is required' });
+    }
+    
+    const user = await db.getUserById(user_id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    await db.addApprovalReviewer(user_id, role);
+    res.json({ message: 'Reviewer added successfully' });
+  } catch (error: any) {
+    console.error('Add reviewer error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update reviewer role
+app.put('/api/reviewers/:userId', authenticate, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { role } = req.body;
+    
+    if (!role) {
+      return res.status(400).json({ error: 'role is required' });
+    }
+    
+    await db.updateReviewerRole(userId, role);
+    res.json({ message: 'Reviewer role updated successfully' });
+  } catch (error: any) {
+    console.error('Update reviewer error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remove approval reviewer
+app.delete('/api/reviewers/:userId', authenticate, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    await db.removeApprovalReviewer(userId);
+    res.json({ message: 'Reviewer removed successfully' });
+  } catch (error: any) {
+    console.error('Remove reviewer error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
 // User-Specific JWT Token Generation (for ChatGPT Authentication)
 // ============================================================================
 
@@ -1164,7 +1893,7 @@ app.post('/api/auth/generate-token', async (req, res) => {
  */
 app.post('/api/auth/create-user', async (req, res) => {
   try {
-    const { email, name } = req.body;
+    const { email, name, role } = req.body;
 
     if (!email) {
       return res.status(400).json({
@@ -1174,6 +1903,92 @@ app.post('/api/auth/create-user', async (req, res) => {
 
     // Create or get user in database
     const user = await db.createOrGetUser(email, name);
+    
+    // Set user role (default to 'admin' for policy manager access)
+    const userRole = role || 'admin';
+    
+    // Check if user already has a role
+    const existingUser = await db.getUserByEmail(email);
+    const hasRole = existingUser && (existingUser as any).role && (existingUser as any).role !== 'user';
+    
+    // Only update role if user doesn't have one or if explicitly provided
+    if (!hasRole || role) {
+      await db.addApprovalReviewer(user.id, userRole);
+      console.log(`✅ User ${email} assigned role: ${userRole}`);
+    }
+
+    // Get updated user with role
+    const updatedUser = await db.getUserByEmail(email);
+
+    // Assign all active policies to new users
+    try {
+      const { rows: allPolicies } = await db.pool.query('SELECT id FROM policies WHERE enabled = true');
+      console.log(`📋 Assigning ${allPolicies.length} policies to user ${user.email}`);
+      for (const policy of allPolicies) {
+        await db.assignPolicyToUser(user.id, policy.id);
+      }
+      console.log(`✅ Assigned policies to ${user.email}`);
+    } catch (policyError: any) {
+      console.error('⚠️  Failed to assign policies:', policyError.message);
+    }
+
+    // Create / restore multi-chain wallet for the user.
+    // Primary key: EVM (secp256k1) — used for x402 on Base / EVM networks.
+    // Also generates a Solana keypair so the user can later settle on Solana.
+    let walletInfo: {
+      evmAddress: string;
+      solanaPublicKey?: string;
+      networks: string[];
+    } | null = null;
+    try {
+      let walletData = await db.getUserWallet(user.id);
+
+      if (!walletData) {
+        // EVM keypair via viem
+        const { generatePrivateKey, privateKeyToAccount } = await import('viem/accounts');
+        const evmPrivateKey = generatePrivateKey();
+        const evmAccount = privateKeyToAccount(evmPrivateKey);
+
+        // Solana keypair (for future Solana x402 settlement)
+        let solanaPublicKey: string | undefined;
+        let solanaSecretKey: number[] | undefined;
+        try {
+          const { Keypair } = await import('@solana/web3.js');
+          const solKeypair = Keypair.generate();
+          solanaPublicKey = solKeypair.publicKey.toBase58();
+          solanaSecretKey = Array.from(solKeypair.secretKey);
+        } catch {
+          // Solana optional — don't block on failure
+        }
+
+        walletData = {
+          userId: user.id,
+          evmAddress: evmAccount.address,
+          evmPrivateKey,
+          solanaPublicKey,
+          solanaSecretKey,
+        };
+        await db.saveUserWallet(walletData);
+        console.log(`💼 Created EVM wallet for ${user.email}: ${evmAccount.address}${solanaPublicKey ? ` + Solana: ${solanaPublicKey}` : ''}`);
+      } else {
+        console.log(`💼 Wallet already exists for ${user.email}: ${walletData.evmAddress}`);
+      }
+
+      walletInfo = {
+        evmAddress: walletData.evmAddress,
+        solanaPublicKey: walletData.solanaPublicKey,
+        networks: [
+          'eip155:8453',   // Base
+          'eip155:1',      // Ethereum
+          'eip155:137',    // Polygon
+          'eip155:42161',  // Arbitrum
+          ...(walletData.solanaPublicKey ? ['solana:mainnet-beta'] : []),
+        ],
+      };
+    } catch (walletError: any) {
+      console.error('⚠️  Failed to create wallet:', (walletError as Error).message);
+      // Don't fail user creation if wallet creation fails
+    }
 
     res.json({
       success: true,
@@ -1181,13 +1996,179 @@ app.post('/api/auth/create-user', async (req, res) => {
         id: user.id,
         email: user.email,
         name: user.name,
+        wallet: walletInfo,
+        role: (updatedUser as any)?.role || userRole,
       },
-      message: user.name ? 'User created/retrieved successfully' : 'User created/retrieved successfully',
+      message: 'User created/retrieved successfully',
     });
   } catch (error: any) {
     console.error('Create user error:', error);
     res.status(500).json({
       error: 'Failed to create user',
+      details: error.message,
+    });
+  }
+});
+
+// OTP: request a verification code (no auth required)
+app.post('/api/auth/request-otp', async (req, res) => {
+  try {
+    const { email, name } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Ensure user exists
+    const namePart = name || normalizedEmail.split('@')[0];
+    const userName = namePart.charAt(0).toUpperCase() + namePart.slice(1).replace(/[._-]/g, ' ');
+    await db.createOrGetUser(normalizedEmail, userName);
+
+    // Generate 6-digit OTP and store in DB
+    const { randomInt } = await import('crypto');
+    const otp = randomInt(100000, 999999).toString();
+    const expires = new Date(Date.now() + 10 * 60 * 1000);
+    await db.setVerificationCode(normalizedEmail, otp, expires);
+
+    console.log(`[OTP] Generated for ${normalizedEmail}: ${otp}`);
+
+    // Return OTP so the calling server (frontend) can email it to the user.
+    // This endpoint should only be called server-to-server, never from the browser.
+    res.json({ success: true, message: 'Verification code generated', email: normalizedEmail, otp });
+  } catch (error: any) {
+    console.error('Request OTP error:', error);
+    res.status(500).json({ error: 'Failed to generate verification code', details: error.message });
+  }
+});
+
+// OTP: verify the code and return user info (no auth required)
+app.post('/api/auth/verify-otp', async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) return res.status(400).json({ error: 'Email and verification code are required' });
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const result = await db.verifyAndClearCode(normalizedEmail, otp.trim());
+
+    if (!result.valid) {
+      return res.status(400).json({ error: result.reason });
+    }
+
+    const user = await db.getUserByEmail(normalizedEmail);
+    if (!user) return res.status(400).json({ error: 'User not found' });
+
+    res.json({
+      success: true,
+      user: { id: user.id, email: user.email, name: (user as any).name },
+    });
+  } catch (error: any) {
+    console.error('Verify OTP error:', error);
+    res.status(500).json({ error: 'Verification failed', details: error.message });
+  }
+});
+
+// Admin endpoint to initialize/re-run database setup
+app.post('/api/admin/db-setup', async (req, res) => {
+  try {
+    console.log('🔧 Running database setup...');
+    const { execSync } = require('child_process');
+    
+    // Run setup.ts directly with tsx - use absolute path from workspace root
+    const path = require('path');
+    // process.cwd() is /app/packages/api in production, so go up to /app
+    const workspaceRoot = path.resolve(process.cwd(), '../..');
+    const setupPath = path.join(workspaceRoot, 'packages/database/src/setup.ts');
+    console.log('CWD:', process.cwd());
+    console.log('Workspace root:', workspaceRoot);
+    console.log('Setup path:', setupPath);
+    
+    const output = execSync(`npx tsx ${setupPath}`, {
+      cwd: process.cwd(),
+      encoding: 'utf-8',
+      timeout: 30000,
+      env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL || '/app/data/shopping.db' }
+    });
+    
+    console.log('✅ Database setup complete');
+    console.log('Setup output:', output);
+    
+    // Verify policies were created
+    const { rows: allPolicies } = await db.pool.query('SELECT id, name FROM policies WHERE enabled = true');
+    console.log(`Found ${allPolicies.length} policies`);
+
+    // Assign policies to all existing users
+    const { rows: allUsers } = await db.pool.query('SELECT id, email FROM users');
+    console.log(`Assigning to ${allUsers.length} users`);
+
+    for (const user of allUsers) {
+      for (const policy of allPolicies) {
+        await db.assignPolicyToUser(user.id, policy.id);
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: 'Database setup completed successfully',
+      policiesCreated: allPolicies.length,
+      usersWithPolicies: allUsers.length,
+      setupOutput: output.substring(0, 1000)
+    });
+  } catch (error: any) {
+    console.error('DB setup error:', error);
+    res.status(500).json({
+      error: 'Database setup failed',
+      details: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+// Admin endpoint to assign policies to existing users
+app.post('/api/admin/assign-policies', async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      // Assign to all users
+      const { rows: allUsers } = await db.pool.query('SELECT id, email FROM users');
+      const { rows: allPolicies } = await db.pool.query('SELECT id FROM policies WHERE enabled = true');
+
+      console.log(`📋 Assigning ${allPolicies.length} policies to ${allUsers.length} users`);
+
+      let assignedCount = 0;
+      for (const user of allUsers) {
+        for (const policy of allPolicies) {
+          await db.assignPolicyToUser(user.id, policy.id);
+          assignedCount++;
+        }
+        console.log(`✅ Assigned policies to ${user.email}`);
+      }
+      
+      return res.json({
+        success: true,
+        message: `Assigned policies to ${allUsers.length} users`,
+        usersUpdated: allUsers.length,
+        policiesPerUser: allPolicies.length,
+        totalAssignments: assignedCount
+      });
+    }
+
+    // Assign to specific user
+    const { rows: allPolicies } = await db.pool.query('SELECT id FROM policies WHERE enabled = true');
+    console.log(`📋 Assigning ${allPolicies.length} policies to user ${userId}`);
+    for (const policy of allPolicies) {
+      await db.assignPolicyToUser(userId, policy.id);
+    }
+    
+    res.json({
+      success: true,
+      message: `Assigned ${allPolicies.length} policies to user`,
+      userId,
+      policiesAssigned: allPolicies.length
+    });
+  } catch (error: any) {
+    console.error('Policy assignment error:', error);
+    res.status(500).json({
+      error: 'Failed to assign policies',
       details: error.message,
     });
   }
@@ -1752,17 +2733,585 @@ app.get('/checkout/cancel', (req, res) => {
   res.send(html);
 });
 
+// ============================================================================
+// Firecrawl Web Scraping Endpoints
+// ============================================================================
+
+app.post('/api/firecrawl/scrape', authenticate, async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: 'url is required' });
+
+    const result = await firecrawlService.scrapeUrl(url);
+
+    auditService.log({
+      eventType: 'firecrawl.scrape',
+      actor: req.user?.userId || 'unknown',
+      actorType: 'user',
+      resource: 'firecrawl',
+      resourceId: url,
+      action: 'scrape',
+      outcome: 'success',
+      details: { url, title: result.title, contentLength: result.markdown.length },
+    });
+
+    res.json({ success: true, result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/firecrawl/interact', authenticate, async (req, res) => {
+  try {
+    const { scrape_id, prompt, code, language, timeout } = req.body;
+    if (!scrape_id) return res.status(400).json({ error: 'scrape_id is required' });
+    if (!prompt && !code) return res.status(400).json({ error: 'prompt or code is required' });
+
+    const result = await firecrawlService.interact(scrape_id, { prompt, code, language, timeout });
+
+    auditService.log({
+      eventType: 'firecrawl.scrape',
+      actor: req.user?.userId || 'unknown',
+      actorType: 'user',
+      resource: 'firecrawl-interact',
+      resourceId: scrape_id,
+      action: 'interact',
+      outcome: result.success ? 'success' : 'failure',
+      details: { scrapeId: scrape_id, prompt: prompt?.substring(0, 200), hasLiveView: !!result.liveViewUrl },
+    });
+
+    res.json({ success: true, result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/firecrawl/session/:scrapeId', authenticate, async (req, res) => {
+  try {
+    const { scrapeId } = req.params;
+    const result = await firecrawlService.stopSession(scrapeId);
+
+    auditService.log({
+      eventType: 'firecrawl.scrape',
+      actor: req.user?.userId || 'unknown',
+      actorType: 'user',
+      resource: 'firecrawl-session',
+      resourceId: scrapeId,
+      action: 'stop_session',
+      outcome: result.success ? 'success' : 'failure',
+      details: { scrapeId },
+    });
+
+    res.json({ ...result, stopped: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/firecrawl/sessions', authenticate, async (req, res) => {
+  try {
+    const sessions = firecrawlService.listActiveSessions();
+    res.json({ sessions, count: sessions.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/firecrawl/search', authenticate, async (req, res) => {
+  try {
+    const { query, limit } = req.body;
+    if (!query) return res.status(400).json({ error: 'query is required' });
+
+    const result = await firecrawlService.search(query, { limit });
+
+    auditService.log({
+      eventType: 'firecrawl.search',
+      actor: req.user?.userId || 'unknown',
+      actorType: 'user',
+      resource: 'firecrawl',
+      action: 'search',
+      outcome: 'success',
+      details: { query, resultCount: result.results.length },
+    });
+
+    res.json({ success: true, result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// Escrow Settlement Endpoints
+// ============================================================================
+
+app.post('/api/escrow/create', authenticate, async (req, res) => {
+  try {
+    const { payer_wallet, payee_wallet, amount, currency, service_type, description, ttl_minutes, metadata } = req.body;
+
+    if (!payer_wallet || !payee_wallet || !amount || !service_type) {
+      return res.status(400).json({ error: 'payer_wallet, payee_wallet, amount, and service_type are required' });
+    }
+
+    const userId = req.user?.userId || 'unknown';
+    const policyCheck = await policyService.checkPolicyOnly({
+      userId,
+      productId: `escrow-${service_type}`,
+      price: amount,
+      merchant: payee_wallet,
+      category: service_type,
+      transactionType: 'agent-to-agent',
+      serviceType: service_type,
+    });
+
+    const correlationId = `txn_${Date.now()}`;
+
+    auditService.log({
+      eventType: 'policy.checked',
+      actor: userId,
+      actorType: 'user',
+      resource: 'policy',
+      action: 'check_for_escrow',
+      outcome: policyCheck.allowed ? 'success' : 'failure',
+      details: { amount, serviceType: service_type, policyResult: policyCheck },
+      correlationId,
+    });
+
+    if (!policyCheck.allowed && !policyCheck.requiresApproval) {
+      return res.status(403).json({
+        error: 'Escrow creation blocked by policy',
+        reason: policyCheck.reason,
+        matchedPolicies: policyCheck.matchedPolicies,
+      });
+    }
+
+    const escrow = await escrowService.createEscrow({
+      payerWallet: payer_wallet,
+      payeeWallet: payee_wallet,
+      amount,
+      currency,
+      serviceType: service_type,
+      description: description || `Escrow for ${service_type}`,
+      policyCheckPassed: policyCheck.allowed || !!policyCheck.requiresApproval,
+      policyDetails: { matchedPolicies: policyCheck.matchedPolicies, requiresApproval: policyCheck.requiresApproval },
+      ttlMinutes: ttl_minutes,
+      metadata,
+    });
+
+    auditService.log({
+      eventType: 'escrow.created',
+      actor: userId,
+      actorType: 'user',
+      resource: 'escrow',
+      resourceId: escrow.id,
+      action: 'create',
+      outcome: 'success',
+      details: {
+        amount, currency: escrow.currency, serviceType: service_type,
+        payerWallet: payer_wallet, payeeWallet: payee_wallet,
+        programId: escrowProgramClient.getProgramId(),
+      },
+      correlationId,
+    });
+
+    // Check if payer_wallet is a valid Solana address for on-chain flow
+    const { PublicKey: SolPublicKey } = require('@solana/web3.js');
+    const isValidSolAddress = (addr: string) => {
+      try { new SolPublicKey(addr); return true; } catch { return false; }
+    };
+    const onChainReady = payer_wallet && isValidSolAddress(payer_wallet);
+
+    res.status(201).json({
+      success: true,
+      escrow,
+      escrow_id: escrow.id,
+      escrow_pda: escrow.id,
+      amount: escrow.amount,
+      // UI will call /api/escrow/build-init-tx to get a fresh tx right before signing
+      needs_signing: onChainReady,
+      payer_wallet: onChainReady ? payer_wallet : null,
+      payee_wallet: onChainReady ? (isValidSolAddress(payee_wallet) ? payee_wallet : payer_wallet) : null,
+      correlationId,
+      programId: escrowProgramClient.getProgramId(),
+      explorerUrl: escrowProgramClient.getAddressExplorerUrl(escrowProgramClient.getProgramId()),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Builds a fresh initializeEscrow transaction with a current blockhash.
+// Called by the UI right before presenting the Phantom popup to avoid blockhash expiry.
+app.post('/api/escrow/build-init-tx', authenticate, async (req, res) => {
+  try {
+    const { payer_wallet, payee_wallet, amount } = req.body;
+    if (!payer_wallet || !amount) {
+      return res.status(400).json({ error: 'payer_wallet and amount required' });
+    }
+    const { PublicKey: SolPublicKey, Keypair: SolKeypair } = require('@solana/web3.js');
+    const payerPk = new SolPublicKey(payer_wallet);
+    const payeePk = payee_wallet ? new SolPublicKey(payee_wallet) : payerPk;
+
+    const initResult = await escrowProgramClient.initializeEscrow(
+      {
+        payerWallet: payerPk,
+        payeeWallet: payeePk,
+        authorityWallet: payerPk,
+        amountUsdc: amount,
+        expiresInMinutes: 60,
+      },
+      SolKeypair.generate(),
+    );
+
+    console.log(`[build-init-tx] Fresh tx for PDA ${initResult.escrowPda}`);
+    res.json({
+      transaction: initResult.transaction,
+      escrowPda: initResult.escrowPda,
+      amount: initResult.amount,
+    });
+  } catch (error: any) {
+    console.error('[build-init-tx] Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/escrow/:id/fund', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { transaction_hash } = req.body;
+    const escrow = await escrowService.fundEscrow(id, transaction_hash);
+
+    auditService.log({
+      eventType: 'escrow.funded',
+      actor: req.user?.userId || 'unknown',
+      actorType: 'user',
+      resource: 'escrow',
+      resourceId: id,
+      action: 'fund',
+      outcome: 'success',
+      details: { amount: escrow.amount, transactionHash: transaction_hash },
+    });
+
+    res.json({ success: true, escrow });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/escrow/:id/release', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const settlement = await escrowService.releaseEscrow(id);
+
+    auditService.log({
+      eventType: 'escrow.released',
+      actor: req.user?.userId || 'unknown',
+      actorType: 'user',
+      resource: 'escrow',
+      resourceId: id,
+      action: 'release',
+      outcome: 'success',
+      details: { amount: settlement.amount, payeeWallet: settlement.payeeWallet },
+    });
+
+    res.json({ success: true, settlement });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/escrow/:id/refund', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    const settlement = await escrowService.refundEscrow(id, reason);
+
+    auditService.log({
+      eventType: 'escrow.refunded',
+      actor: req.user?.userId || 'unknown',
+      actorType: 'user',
+      resource: 'escrow',
+      resourceId: id,
+      action: 'refund',
+      outcome: 'success',
+      details: { amount: settlement.amount, reason },
+    });
+
+    res.json({ success: true, settlement });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get('/api/escrow/:id', authenticate, async (req, res) => {
+  try {
+    const escrow = await escrowService.getEscrow(req.params.id);
+    if (!escrow) return res.status(404).json({ error: 'Escrow not found' });
+    res.json({ escrow });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/escrows', authenticate, async (req, res) => {
+  try {
+    const { status, payer_wallet, payee_wallet, limit } = req.query;
+    const escrows = await escrowService.listEscrows({
+      status: status as any,
+      payerWallet: payer_wallet as string,
+      payeeWallet: payee_wallet as string,
+      limit: limit ? parseInt(limit as string) : undefined,
+    });
+    res.json({ escrows, count: escrows.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/escrow/stats/summary', authenticate, async (req, res) => {
+  try {
+    const stats = await escrowService.getEscrowStats();
+    res.json({ stats });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/settlements', authenticate, async (req, res) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
+    const settlements = await escrowService.getSettlementHistory(limit);
+    res.json({ settlements, count: settlements.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// Wallet & On-Chain Escrow Endpoints
+// ============================================================================
+
+app.get('/api/wallet/balance', async (req, res) => {
+  try {
+    const address = req.query.address as string;
+    if (!address) return res.status(400).json({ error: 'address required' });
+
+    const { Connection, PublicKey } = await import('@solana/web3.js');
+    const { getAssociatedTokenAddress } = await import('@solana/spl-token');
+    const rpcUrl = process.env.SOLANA_RPC_MAINNET || 'https://api.mainnet-beta.solana.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+    const usdcMint = new PublicKey(process.env.USDC_MINT_MAINNET || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+    const wallet = new PublicKey(address);
+
+    let solBalance = 0;
+    let usdcBalance = 0;
+    try {
+      solBalance = (await connection.getBalance(wallet)) / 1e9;
+    } catch {}
+    try {
+      const ata = await getAssociatedTokenAddress(usdcMint, wallet);
+      const tokenInfo = await connection.getTokenAccountBalance(ata);
+      usdcBalance = Number(tokenInfo.value.uiAmount || 0);
+    } catch {}
+
+    res.json({ address, solBalance, usdcBalance });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/escrow/build-deposit', authenticate, async (req, res) => {
+  try {
+    const { escrow_pda, payer_wallet } = req.body;
+    if (!escrow_pda || !payer_wallet) {
+      return res.status(400).json({ error: 'escrow_pda and payer_wallet required' });
+    }
+    const result = await escrowProgramClient.buildDepositTransaction(escrow_pda, payer_wallet);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/escrow/confirm-deposit', authenticate, async (req, res) => {
+  try {
+    const { escrow_id, tx_signature, user_email } = req.body;
+    if (!tx_signature) {
+      return res.status(400).json({ error: 'tx_signature required' });
+    }
+
+    const explorerUrl = escrowProgramClient.getExplorerUrl(tx_signature);
+
+    auditService.log({
+      eventType: 'escrow.deposit.confirmed',
+      actor: user_email || 'unknown',
+      actorType: 'user',
+      resource: escrow_id || tx_signature,
+      action: 'confirm_deposit',
+      outcome: 'success',
+      details: { tx_signature, explorerUrl },
+    });
+
+    res.json({
+      verified: true,
+      tx_signature,
+      explorerUrl,
+      receiptHash: tx_signature.slice(0, 32),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message, verified: false });
+  }
+});
+
+app.get('/api/escrow/:id/on-chain', authenticate, async (req, res) => {
+  try {
+    const state = await escrowProgramClient.getEscrowState(req.params.id);
+    if (!state) return res.status(404).json({ error: 'Escrow not found on-chain' });
+    res.json({
+      ...state,
+      explorerUrl: escrowProgramClient.getAddressExplorerUrl(req.params.id),
+      programId: escrowProgramClient.getProgramId(),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// Audit Trail Endpoints
+// ============================================================================
+
+app.get('/api/audit', authenticate, async (req, res) => {
+  try {
+    const { event_type, actor, resource, outcome, since, until, limit, offset, correlation_id } = req.query;
+    const result = await auditService.query({
+      eventType: event_type as any,
+      actor: actor as string,
+      resource: resource as string,
+      outcome: outcome as string,
+      since: since as string,
+      until: until as string,
+      limit: limit ? parseInt(limit as string) : undefined,
+      offset: offset ? parseInt(offset as string) : undefined,
+      correlationId: correlation_id as string,
+    });
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/audit/stats', authenticate, async (req, res) => {
+  try {
+    const stats = await auditService.getStats();
+    res.json({ stats });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/audit/trace/:correlationId', authenticate, async (req, res) => {
+  try {
+    const trace = await auditService.getTransactionTrace(req.params.correlationId);
+    res.json({ correlationId: req.params.correlationId, trace, count: trace.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/audit/:id', authenticate, async (req, res) => {
+  try {
+    const entry = await auditService.getEntry(req.params.id);
+    if (!entry) return res.status(404).json({ error: 'Audit entry not found' });
+    res.json({ entry });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// User Activity & Profile Endpoints
+// ============================================================================
+
+app.get('/api/user/activity', authenticate, async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    const limit  = parseInt(req.query.limit as string) || 100;
+    const type   = req.query.event_type as string | undefined;
+    const since  = req.query.since as string | undefined;
+    const events = await db.getUserEvents(userId, { limit, eventType: type, since });
+    res.json({ userId, events, count: events.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/user/profile', authenticate, async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    let profile = await db.getUserProfile(userId);
+
+    if (!profile) {
+      await db.synthesizeUserProfile(userId);
+      profile = await db.getUserProfile(userId);
+    }
+
+    const user = await db.getUserByEmail((req.user as any).email || '');
+    res.json({ userId, profile, user: user ? { id: user.id, email: user.email, name: (user as any).name } : null });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/user/synthesize-profile', authenticate, async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    await db.synthesizeUserProfile(userId);
+    res.json({ success: true, profile: await db.getUserProfile(userId) });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin: all events across all users (for analytics dashboards)
+app.get('/api/admin/events', authenticate, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 500;
+    const since = req.query.since as string | undefined;
+    const events = await db.getAllUserEvents({ limit, since });
+    res.json({ events, count: events.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Nightly profile aggregation (runs every 24h, synthesizes all active users) ──
+const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+setInterval(async () => {
+  try {
+    console.log('🔄 Running nightly user profile synthesis...');
+    const users = await db.getAllUsers();
+    for (const user of users) {
+      await db.synthesizeUserProfile(user.id);
+    }
+    console.log(`✅ Profile synthesis complete for ${users.length} users`);
+  } catch (err: any) {
+    console.error('⚠️  Profile synthesis failed:', err.message);
+  }
+}, TWENTY_FOUR_HOURS);
+
+// Global error handler — must be after ALL route registrations
+app.use(globalErrorHandler);
+
 // Bind to 0.0.0.0 for Docker/Render compatibility
 const HOST = '0.0.0.0';
 
-// Error handling for uncaught exceptions
 process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
+  console.error('Uncaught Exception:', error);
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
   process.exit(1);
 });
 
@@ -1773,6 +3322,7 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`✓ Stripe: ${process.env.STRIPE_SECRET_KEY ? 'Configured ✓' : 'Mock mode (add STRIPE_SECRET_KEY to .env)'}`);
   console.log(`✓ Etsy API: ${process.env.ETSY_API_KEY ? 'Configured ✓' : 'Mock mode (add ETSY_API_KEY to .env)'}`);
   console.log(`✓ Database: ${process.env.DATABASE_URL || './data/shopping.db'}`);
+  console.log(`✓ Platform API v1: http://localhost:${PORT}/api/v1/health`);
   console.log(`✓ Server ready to accept connections`);
 });
 

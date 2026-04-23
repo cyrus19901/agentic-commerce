@@ -1,9 +1,6 @@
 # Multi-stage build for efficient image size
 FROM node:20-alpine AS builder
 
-# Install build dependencies for native modules
-RUN apk add --no-cache python3 make g++ sqlite
-
 WORKDIR /app
 
 # Copy package files
@@ -20,13 +17,17 @@ RUN npm install
 # Copy source code
 COPY . .
 
-# Build all packages
-RUN npm run build
+# Build packages in correct order (shared -> database -> others)
+RUN npm run build --workspace=@agentic-commerce/shared && \
+    npm run build --workspace=@agentic-commerce/database && \
+    npm run build --workspace=@agentic-commerce/core && \
+    npm run build --workspace=@agentic-commerce/integrations && \
+    npm run build --workspace=@agentic-commerce/api
 
 # Production stage
 FROM node:20-alpine
 
-RUN apk add --no-cache sqlite wget
+RUN apk add --no-cache wget
 
 WORKDIR /app
 
@@ -35,20 +36,17 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/packages ./packages
 
-# Create data directory for SQLite
-RUN mkdir -p /app/data
-
 # Copy entrypoint script
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
 # Expose port
-EXPOSE 3000
+EXPOSE 3001
 
 # Health check with longer timeout for cold starts
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
 
 # Start the application
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-
+CMD ["npm", "start"]

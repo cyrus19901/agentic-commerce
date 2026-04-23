@@ -7,16 +7,56 @@ services:
     healthCheckPath: /health
     envVars:
       - key: PORT
-        value: 3000
+        value: 3001
       - key: NODE_ENV
         value: production
+
+      # ── Database ──────────────────────────────────────────────────────────────
+      # Paste your existing Render PostgreSQL internal connection string here
       - key: DATABASE_URL
-        value: /data/shopping.db
+        sync: false
+
+      # ── Auth ──────────────────────────────────────────────────────────────────
       - key: JWT_SECRET
         generateValue: true
+
+      # ── Wallet Encryption (AES-256-GCM) ──────────────────────────────────────
+      # Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+      - key: WALLET_ENCRYPTION_KEY
+        sync: false
+
+      # ── CORS ──────────────────────────────────────────────────────────────────
+      - key: ALLOWED_ORIGINS
+        value: https://chat.openai.com,https://chatgpt.com
+
+      # ── OpenAI ────────────────────────────────────────────────────────────────
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_CHAT_MODEL
+        value: gpt-4o-mini
+
+      # ── Firecrawl ─────────────────────────────────────────────────────────────
+      - key: FIRECRAWL_API_KEY
+        sync: false
+      - key: FIRECRAWL_AGENT_PRIVATE_KEY
+        sync: false
+      - key: BASE_RPC_URL
+        value: https://mainnet.base.org
+      - key: USDC_BASE_CONTRACT
+        value: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      - key: X402_NATIVE_EXEC_TIMEOUT_MS
+        value: "120000"
+
+      # ── Zyte ──────────────────────────────────────────────────────────────────
+      - key: ZYTE_API_KEY
+        sync: false
+
+      # ── Stripe (optional legacy rail) ─────────────────────────────────────────
       - key: STRIPE_SECRET_KEY
-        sync: false  # You'll need to set this manually in Render dashboard
-    disk:
-      name: agentic-commerce-data
-      mountPath: /data
-      sizeGB: 1
+        sync: false
+
+      # ── Solana ────────────────────────────────────────────────────────────────
+      - key: SOLANA_CLUSTER
+        value: mainnet-beta
+      - key: SOLANA_RPC_MAINNET
+        sync: false

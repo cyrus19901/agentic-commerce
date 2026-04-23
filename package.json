@@ -3,29 +3,43 @@
   "version": "1.0.0",
   "private": true,
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ],
   "scripts": {
-    "setup": "npm install && npm run build && npm run db:setup",
+    "setup": "npm install && npm run build && npm run db:migrate && npm run db:seed",
     "dev": "npm run dev --workspace=@agentic-commerce/api",
-    "build": "npm run build --workspaces --if-present",
+    "dev:ui": "npm run dev --workspace=@agentic-commerce/chat-ui",
+    "dev:all": "npm run dev --workspace=@agentic-commerce/api & npm run dev --workspace=@agentic-commerce/chat-ui",
+    "dev:playground": "npm run dev --workspace=@agentic-commerce/playground",
+    "dev:dashboard": "npm run dev --workspace=@agentic-commerce/dashboard",
+    "dev:demo": "npm run dev --workspace=@agentic-commerce/demo",
+    "build": "npm run build --workspace=@agentic-commerce/shared && npm run build --workspaces --if-present",
     "start": "npm run start --workspace=@agentic-commerce/api",
     "test": "npm run test --workspaces --if-present",
-    "db:setup": "npm run db:setup --workspace=@agentic-commerce/database",
+    "test:e2e:real": "npx tsx tests/e2e/agent-x402-real-solana.test.ts",
+    "test:e2e:provider-onboarding": "npx tsx tests/e2e/provider-onboarding-archtools.ts",
+    "test:e2e:provider-native-x402": "npx tsx tests/e2e/provider-native-x402-submit.ts",
+    "test:e2e:provider-native-org-routing": "npx tsx tests/e2e/provider-native-org-routing.ts",
+    "test:e2e:x402-flow": "npx tsx tests/e2e/x402-protocol-flow.ts",
+    "db:migrate": "npm run db:migrate --workspace=@agentic-commerce/database",
+    "db:seed": "npm run db:seed --workspace=@agentic-commerce/database",
+    "db:rollback": "npm run db:rollback --workspace=@agentic-commerce/database",
     "generate-token": "tsx scripts/generate-token.ts",
     "create-user": "tsx scripts/create-user-and-token.ts",
+    "test:x402-e2e": "tsx scripts/test-x402-e2e.ts",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
+    "node-fetch": "^2.6.7",
     "tsx": "^4.7.0",
     "typescript": "^5.3.0"
   },
   "dependencies": {
-    "@prisma/client": "^7.3.0",
-    "prisma": "^7.3.0",
+    "@solana/web3.js": "^1.98.4",
     "stripe": "^20.2.0"
   }
 }
