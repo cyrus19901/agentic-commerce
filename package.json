@@ -14,7 +14,7 @@
     "dev:playground": "npm run dev --workspace=@agentic-commerce/playground",
     "dev:dashboard": "npm run dev --workspace=@agentic-commerce/dashboard",
     "dev:demo": "npm run dev --workspace=@agentic-commerce/demo",
-    "build": "npm run build --workspace=@agentic-commerce/shared && npm run build --workspaces --if-present",
+    "build": "npm run build --workspace=@agentic-commerce/shared && npm run build --workspace=@agentic-commerce/database && npm run build --workspace=@agentic-commerce/integrations && npm run build --workspace=@agentic-commerce/core && npm run build --workspaces --if-present",
     "start": "npm run start --workspace=@agentic-commerce/api",
     "test": "npm run test --workspaces --if-present",
     "test:e2e:real": "npx tsx tests/e2e/agent-x402-real-solana.test.ts",
