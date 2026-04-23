@@ -51,6 +51,9 @@ export interface Policy {
     blockedRecipientAgents?: string[];
     allowedRecipientAgentTypes?: string[];
     blockedRecipientAgentTypes?: string[];
+    // Trust/risk-based rules (useful for agent/provider trust gates)
+    minTrustScore?: number;
+    maxTrustScore?: number;
     // Service-based rules (for agent-to-agent)
     allowedServiceTypes?: string[];
     blockedServiceTypes?: string[];
@@ -99,6 +102,7 @@ export interface PurchaseRequest {
   timeOfDay?: string; // HH:MM format
   dayOfWeek?: number; // 0-6, Sunday = 0
   recipientAgent?: string;
+  trustScore?: number;
   purpose?: string;
   // Agent-to-agent specific fields
   buyerAgentId?: string;

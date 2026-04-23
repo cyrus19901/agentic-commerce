@@ -5,7 +5,20 @@ export class PolicyService {
   constructor(private db: DB) {}
 
   async checkPolicyOnlyForOrg(orgId: string, request: PurchaseRequest): Promise<PolicyCheckResult> {
-    const policies = await this.db.getActivePoliciesByOrg(orgId);
+    // If request names a specific recipient agent, prefer agent-scoped policies.
+    const recipientAgentId = request.recipientAgent?.trim();
+    const policies = recipientAgentId
+      ? await this.db.getActivePoliciesForAgent(recipientAgentId, orgId)
+      : await this.db.getActivePoliciesByOrg(orgId);
+    return this.evaluatePolicies(policies, request);
+  }
+
+  async checkPolicyOnlyForAgent(agentId: string, request: PurchaseRequest, orgId?: string): Promise<PolicyCheckResult> {
+    const policies = await this.db.getActivePoliciesForAgent(agentId, orgId);
+    return this.evaluatePolicies(policies, request);
+  }
+
+  private async evaluatePolicies(policies: Policy[], request: PurchaseRequest): Promise<PolicyCheckResult> {
     const matchedPolicies: PolicyCheckResult['matchedPolicies'] = [];
     let allowed = true;
     let reason: string | undefined;
@@ -14,7 +27,7 @@ export class PolicyService {
     const transactionType = request.transactionType || 'agent-to-merchant';
 
     if (policies.length === 0) {
-      return { allowed: false, reason: 'No policies configured for this organization', matchedPolicies: [] };
+      return { allowed: false, reason: 'No policies configured', matchedPolicies: [] };
     }
 
     const applicablePolicies = policies.filter(policy => {
@@ -55,73 +68,7 @@ export class PolicyService {
    */
   async checkPolicyOnly(request: PurchaseRequest): Promise<PolicyCheckResult> {
     const policies = await this.db.getActivePolicies(request.userId);
-    const matchedPolicies: PolicyCheckResult['matchedPolicies'] = [];
-    let allowed = true;
-    let reason: string | undefined;
-    let requiresApproval = false;
-    let flaggedForReview = false;
-    const transactionType = request.transactionType || 'agent-to-merchant';
-
-    // If no policies, deny by default for safety
-    if (policies.length === 0) {
-      return {
-        allowed: false,
-        reason: 'No policies configured',
-        matchedPolicies: [],
-      };
-    }
-
-    // Filter policies by transaction type (same logic as checkPurchase)
-    const applicablePolicies = policies.filter(policy => {
-      if (!policy.transactionTypes || policy.transactionTypes.length === 0) return true;
-      return policy.transactionTypes.includes(transactionType) || policy.transactionTypes.includes('all');
-    });
-
-    if (applicablePolicies.length === 0) {
-      return {
-        allowed: false,
-        reason: `No policies configured for ${transactionType} transactions`,
-        matchedPolicies: [],
-      };
-    }
-
-    for (const policy of applicablePolicies) {
-      const result = await this.checkPolicy(policy, request, transactionType);
-      matchedPolicies.push({
-        id: policy.id,
-        name: policy.name,
-        passed: result.passed,
-        reason: result.reason,
-      });
-
-      if (!result.passed) {
-        allowed = false;
-        reason = result.reason;
-        // Check if this policy requires approval
-        if ((result as any).requiresApproval) {
-          requiresApproval = true;
-        }
-        if ((result as any).flaggedForReview) {
-          flaggedForReview = true;
-        }
-        // Don't break if it requires approval - we want to check all policies
-        // But break for deny actions
-        if (!(result as any).requiresApproval && !(result as any).flaggedForReview) {
-          break;
-        }
-      } else if ((result as any).flaggedForReview) {
-        flaggedForReview = true;
-      }
-    }
-
-    // NO RECORDING - just return the check result
-    return { 
-      allowed, 
-      reason, 
-      requiresApproval: requiresApproval || undefined,
-      flaggedForReview: flaggedForReview || undefined,
-      matchedPolicies 
-    };
+    return this.evaluatePolicies(policies, request);
   }
 
   /**
@@ -494,6 +441,49 @@ export class PolicyService {
           };
         }
       }
+
+      // Enforce amount cap for merchant policies as well.
+      if (policy.rules.maxTransactionAmount !== undefined && request.price > policy.rules.maxTransactionAmount) {
+        const fallbackAction = policy.rules.fallbackAction || 'require_approval';
+        switch (fallbackAction) {
+          case 'deny':
+            return {
+              passed: false,
+              reason: `Amount $${request.price} exceeds merchant limit of $${policy.rules.maxTransactionAmount}`,
+            };
+          case 'require_approval':
+            return {
+              passed: false,
+              reason: `Amount $${request.price} exceeds merchant limit of $${policy.rules.maxTransactionAmount} - manual approval required`,
+              requiresApproval: true,
+            };
+          case 'flag_review':
+            return {
+              passed: true,
+              reason: `Amount $${request.price} exceeds merchant limit - flagged for review`,
+              flaggedForReview: true,
+            };
+          case 'approve':
+          default:
+            break;
+        }
+      }
+
+      // Optional trust score constraints for provider/merchant policies.
+      if (request.trustScore !== undefined && request.trustScore !== null) {
+        if (policy.rules.minTrustScore !== undefined && request.trustScore < policy.rules.minTrustScore) {
+          return {
+            passed: false,
+            reason: `Trust score ${request.trustScore} is below required minimum ${policy.rules.minTrustScore}`,
+          };
+        }
+        if (policy.rules.maxTrustScore !== undefined && request.trustScore > policy.rules.maxTrustScore) {
+          return {
+            passed: false,
+            reason: `Trust score ${request.trustScore} is above allowed maximum ${policy.rules.maxTrustScore}`,
+          };
+        }
+      }
     }
 
     // Category check
@@ -679,6 +669,22 @@ export class PolicyService {
               reason: `Recipient agent "${request.recipientAgent}" is not in the allowed list`,
             };
           }
+        }
+      }
+
+      // Trust score checks for agent/provider level controls.
+      if (request.trustScore !== undefined && request.trustScore !== null) {
+        if (policy.rules.minTrustScore !== undefined && request.trustScore < policy.rules.minTrustScore) {
+          return {
+            passed: false,
+            reason: `Trust score ${request.trustScore} is below required minimum ${policy.rules.minTrustScore}`,
+          };
+        }
+        if (policy.rules.maxTrustScore !== undefined && request.trustScore > policy.rules.maxTrustScore) {
+          return {
+            passed: false,
+            reason: `Trust score ${request.trustScore} is above allowed maximum ${policy.rules.maxTrustScore}`,
+          };
         }
       }
     }

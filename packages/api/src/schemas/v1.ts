@@ -39,6 +39,8 @@ export const PolicyCheckBody = z.object({
   category: z.string().optional(),
   transactionType: z.string().default('agent-to-agent'),
   serviceType: z.string().optional(),
+  recipientAgent: z.string().optional(),
+  trustScore: z.number().optional(),
 });
 
 export const AuditQuery = z.object({

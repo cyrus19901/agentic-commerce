@@ -1739,6 +1739,123 @@ app.delete('/api/users/:userId/policies/:policyId', authenticate, async (req, re
   }
 });
 
+// Get agent policy assignments
+app.get('/api/agents/:agentId/policies', authenticate, async (req, res) => {
+  try {
+    const { agentId } = req.params;
+    const agent = await db.getRegisteredAgent(agentId);
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+
+    const policies = await db.getAgentPolicies(agentId);
+    res.json({
+      agent: {
+        agentId: agent.agentId,
+        name: agent.name,
+        active: agent.active,
+        verified: agent.verified,
+      },
+      policies,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Assign policy to agent
+app.post('/api/agents/:agentId/policies/:policyId', authenticate, async (req, res) => {
+  try {
+    const { agentId, policyId } = req.params;
+
+    const agent = await db.getRegisteredAgent(agentId);
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+
+    const policy = await db.getPolicyById(policyId);
+    if (!policy) {
+      return res.status(404).json({ error: 'Policy not found' });
+    }
+
+    await db.assignPolicyToAgent(agentId, policyId);
+    res.json({ message: 'Policy assigned to agent successfully' });
+  } catch (error: any) {
+    if (error.message?.includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Policy already assigned to agent' });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remove policy from agent
+app.delete('/api/agents/:agentId/policies/:policyId', authenticate, async (req, res) => {
+  try {
+    const { agentId, policyId } = req.params;
+    await db.removePolicyFromAgent(agentId, policyId);
+    res.json({ message: 'Policy removed from agent successfully' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// URI-safe variants for agent IDs like "agent://..."
+app.get('/api/agents/policies', authenticate, async (req, res) => {
+  try {
+    const agentId = String(req.query.agent_id || '').trim();
+    if (!agentId) return res.status(400).json({ error: 'agent_id is required' });
+    const agent = await db.getRegisteredAgent(agentId);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    const policies = await db.getAgentPolicies(agentId);
+    res.json({
+      agent: {
+        agentId: agent.agentId,
+        name: agent.name,
+        active: agent.active,
+        verified: agent.verified,
+      },
+      policies,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/agents/policies/assign', authenticate, async (req, res) => {
+  try {
+    const agentId = String(req.body?.agent_id || '').trim();
+    const policyId = String(req.body?.policy_id || '').trim();
+    if (!agentId || !policyId) {
+      return res.status(400).json({ error: 'agent_id and policy_id are required' });
+    }
+    const agent = await db.getRegisteredAgent(agentId);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    const policy = await db.getPolicyById(policyId);
+    if (!policy) return res.status(404).json({ error: 'Policy not found' });
+    await db.assignPolicyToAgent(agentId, policyId);
+    res.json({ message: 'Policy assigned to agent successfully' });
+  } catch (error: any) {
+    if (error.message?.includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Policy already assigned to agent' });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/agents/policies/assign', authenticate, async (req, res) => {
+  try {
+    const agentId = String(req.body?.agent_id || req.query?.agent_id || '').trim();
+    const policyId = String(req.body?.policy_id || req.query?.policy_id || '').trim();
+    if (!agentId || !policyId) {
+      return res.status(400).json({ error: 'agent_id and policy_id are required' });
+    }
+    await db.removePolicyFromAgent(agentId, policyId);
+    res.json({ message: 'Policy removed from agent successfully' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============================================================================
 // Approval Reviewer Management
 // ============================================================================

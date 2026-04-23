@@ -95,7 +95,20 @@ export class DB {
 
   // ── Policy methods ───────────────────────────────────────────────────────────
 
-  async getActivePolicies(_userId?: string): Promise<Policy[]> {
+  async getActivePolicies(userId?: string): Promise<Policy[]> {
+    // If a user has explicit assignments, prefer those.
+    if (userId) {
+      const userRows = await this.all(
+        `SELECT p.*
+         FROM policies p
+         INNER JOIN user_policies up ON p.id = up.policy_id
+         WHERE up.user_id = ? AND p.enabled = true
+         ORDER BY p.priority DESC, p.created_at DESC`,
+        [userId],
+      );
+      if (userRows.length > 0) return userRows.map(mapPolicy);
+    }
+
     const rows = await this.all(
       'SELECT * FROM policies WHERE enabled = true ORDER BY priority DESC'
     );
@@ -108,6 +121,24 @@ export class DB {
       [orgId],
     );
     if (rows.length > 0) return rows.map(mapPolicy);
+    return this.getActivePolicies();
+  }
+
+  async getActivePoliciesForAgent(agentId: string, orgId?: string): Promise<Policy[]> {
+    // Agent-specific assignments take precedence.
+    const assignedRows = await this.all(
+      `SELECT p.*
+       FROM policies p
+       INNER JOIN agent_policies ap ON p.id = ap.policy_id
+       WHERE ap.agent_id = ? AND p.enabled = true
+       ORDER BY p.priority DESC, p.created_at DESC`,
+      [agentId],
+    );
+    if (assignedRows.length > 0) return assignedRows.map(mapPolicy);
+
+    if (orgId) {
+      return this.getActivePoliciesByOrg(orgId);
+    }
     return this.getActivePolicies();
   }
 
@@ -197,6 +228,37 @@ export class DB {
     await this.run(
       'DELETE FROM user_policies WHERE user_id = ? AND policy_id = ?',
       [userId, policyId]
+    );
+  }
+
+  // ── Agent-policy assignment ──────────────────────────────────────────────────
+
+  async getAgentPolicies(agentId: string): Promise<Policy[]> {
+    const rows = await this.all(
+      `SELECT p.*
+       FROM policies p
+       INNER JOIN agent_policies ap ON p.id = ap.policy_id
+       WHERE ap.agent_id = ?
+       ORDER BY p.priority DESC, p.created_at DESC`,
+      [agentId],
+    );
+    return rows.map(mapPolicy);
+  }
+
+  async assignPolicyToAgent(agentId: string, policyId: string): Promise<void> {
+    const id = `agent-policy-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    await this.run(
+      `INSERT INTO agent_policies (id, agent_id, policy_id, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (agent_id, policy_id) DO NOTHING`,
+      [id, agentId, policyId, new Date()],
+    );
+  }
+
+  async removePolicyFromAgent(agentId: string, policyId: string): Promise<void> {
+    await this.run(
+      'DELETE FROM agent_policies WHERE agent_id = ? AND policy_id = ?',
+      [agentId, policyId],
     );
   }
 

@@ -154,6 +154,323 @@ export function createV1Router(deps: {
     },
   );
 
+  // ── User-wallet direct payment: discover chain → build header → execute → return response ──
+  router.post('/payments/pay',
+    requireScope('payments:write'),
+    async (req: Request, res: Response) => {
+      try {
+        const { provider_id, action = 'request', params = {}, user_email, preferred_network } = req.body;
+        if (!provider_id) {
+          res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'provider_id is required' } });
+          return;
+        }
+        if (!user_email) {
+          res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'user_email is required' } });
+          return;
+        }
+
+        const user = await db.getUserByEmail(user_email as string);
+        if (!user) {
+          res.status(404).json({ error: { code: 'USER_NOT_FOUND', message: `No user found for: ${user_email}` } });
+          return;
+        }
+
+        const { normalizeHexPrivateKey, CHAIN_REGISTRY, toCaip2, isSolanaNetwork, isEvmNetwork } = require('@agentic-commerce/shared');
+        const wallet = await db.getUserWallet(user.id);
+        const userEvmPk = normalizeHexPrivateKey(wallet?.evmPrivateKey || '');
+        const demoEvmPk = normalizeHexPrivateKey(process.env.DEMO_BUYER_PRIVATE_KEY || process.env.FIRECRAWL_AGENT_PRIVATE_KEY || '');
+        const allowDemoEvmFallback =
+          String(process.env.PAYMENTS_PAY_ALLOW_DEMO_FALLBACK || (process.env.NODE_ENV === 'production' ? 'false' : 'true')).toLowerCase() === 'true';
+        const evmPk = allowDemoEvmFallback && demoEvmPk ? demoEvmPk : userEvmPk;
+
+        if (!wallet?.evmPrivateKey && !(allowDemoEvmFallback && demoEvmPk)) {
+          res.status(400).json({ error: { code: 'WALLET_NOT_FOUND', message: 'User wallet not found. Visit the hub to create one.' } });
+          return;
+        }
+
+        const { rows: provRows } = await db.pool.query('SELECT * FROM providers WHERE id = $1', [provider_id]);
+        const prov = provRows[0];
+        if (!prov) {
+          res.status(404).json({ error: { code: 'PROVIDER_NOT_FOUND', message: `Provider not found: ${provider_id}` } });
+          return;
+        }
+        if (prov.enabled === false) {
+          const meta = typeof prov.metadata === 'string' ? JSON.parse(prov.metadata) : (prov.metadata || {});
+          const trust = meta?.trustGate || {};
+          res.status(409).json({
+            error: {
+              code: 'PROVIDER_NOT_SETTLEMENT_READY',
+              message: `Provider is registered in best-effort mode but not settlement-ready (${trust?.reason || 'trust_gate_failed'})`,
+            },
+            provider: {
+              id: prov.id,
+              name: prov.name,
+              enabled: prov.enabled,
+            },
+            trust,
+          });
+          return;
+        }
+
+        const meta = typeof prov.metadata === 'string' ? JSON.parse(prov.metadata) : (prov.metadata || {});
+        const probe = meta.probeSnapshot || {};
+        const rawAccepts: any[] = probe.rawAccepts || [];
+        const endpointUrl: string = meta.endpoints?.[(action as string)] || prov.endpoint || '';
+        const method: string = meta.method || 'GET';
+
+        if (!endpointUrl) {
+          res.status(400).json({ error: { code: 'NO_ENDPOINT', message: 'Provider has no endpoint configured.' } });
+          return;
+        }
+        if (!rawAccepts.length) {
+          res.status(400).json({ error: { code: 'NO_PAYMENT_METHODS', message: 'No accepted payment methods in stored probe data.' } });
+          return;
+        }
+
+        // Enforce policy engine before x402 settlement.
+        const probePriceUsdc = Number(probe?.priceUsdc || 0);
+        const trustScoreRaw = meta?.trustScore ?? meta?.trustGate?.trustScore ?? undefined;
+        const trustScore = trustScoreRaw != null ? Number(trustScoreRaw) : undefined;
+        const policyResult = await policyService.checkPolicyOnlyForOrg(req.org!.orgId, {
+          userId: user.id,
+          productId: `${provider_id}:${String(action)}`,
+          price: Number.isFinite(probePriceUsdc) && probePriceUsdc > 0 ? probePriceUsdc : 0.01,
+          merchant: String(provider_id),
+          category: String(meta?.category || 'x402'),
+          transactionType: 'agent-to-agent',
+          serviceType: String(action),
+          recipientAgent: String(provider_id),
+          trustScore: Number.isFinite(trustScore as number) ? (trustScore as number) : undefined,
+          purpose: typeof (params as any)?.url === 'string'
+            ? String((params as any).url)
+            : `${provider_id}:${String(action)}`,
+        } as any);
+        if (!policyResult?.allowed) {
+          res.status(403).json({
+            error: {
+              code: policyResult?.requiresApproval ? 'POLICY_REQUIRES_APPROVAL' : 'POLICY_BLOCKED',
+              message: policyResult?.reason || 'Payment blocked by policy',
+            },
+            policy: policyResult,
+          });
+          return;
+        }
+
+        let solanaPayer: any = null;
+        if (wallet?.solanaSecretKey) {
+          try {
+            const { Keypair } = require('@solana/web3.js');
+            const raw = wallet.solanaSecretKey as any;
+            if (typeof raw === 'string' && raw.startsWith('[')) {
+              solanaPayer = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(raw)));
+            } else if (Array.isArray(raw)) {
+              solanaPayer = Keypair.fromSecretKey(Uint8Array.from(raw));
+            } else {
+              const bs58: any = require('bs58');
+              solanaPayer = Keypair.fromSecretKey((bs58.default?.decode ?? bs58.decode)(raw));
+            }
+          } catch { /* no Solana wallet */ }
+        }
+
+        // Sort: preferred_network first → non-CDP EVM → CDP → Solana
+        const sortedAccepts = [...rawAccepts].sort((a, b) => {
+          const an = toCaip2(a.network || 'base');
+          const bn = toCaip2(b.network || 'base');
+          if (preferred_network) {
+            const pn = toCaip2(preferred_network as string);
+            if (an === pn) return -1;
+            if (bn === pn) return 1;
+          }
+          const ac = String(a.extra?.facilitator || '').includes('cdp.coinbase.com') ? 1 : 0;
+          const bc = String(b.extra?.facilitator || '').includes('cdp.coinbase.com') ? 1 : 0;
+          return ac - bc;
+        });
+
+        const paymentId = `pay_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+        let executionResult: any = null;
+        let lastError = '';
+
+        for (const accept of sortedAccepts) {
+          const caip2 = toCaip2(accept.network || 'base');
+          const chainCfg = CHAIN_REGISTRY[caip2];
+          const isSolana = isSolanaNetwork(caip2);
+          const isEvm = isEvmNetwork(caip2);
+          const priceAtomic = Number(accept.maxAmountRequired || accept.amount || 0);
+
+          if (!chainCfg || (!isEvm && !isSolana)) { lastError = `unsupported_network:${caip2}`; continue; }
+          if (isEvm && !evmPk) { lastError = 'missing_evm_wallet'; continue; }
+          if (isSolana && !solanaPayer) { lastError = 'missing_solana_wallet'; continue; }
+          if (!Number.isFinite(priceAtomic) || priceAtomic <= 0) { lastError = 'invalid_price'; continue; }
+
+          let paymentHeader = '';
+          try {
+            if (isSolana) {
+              const { Connection, PublicKey, Transaction } = require('@solana/web3.js');
+              const { getAssociatedTokenAddress, createTransferInstruction, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+              const conn = new Connection(process.env.SOLANA_RPC_MAINNET || chainCfg.rpcUrl, 'confirmed');
+              const payerPk = solanaPayer.publicKey;
+              const recipientPk = new PublicKey(String(accept.payTo || '').trim());
+              const mintPk = new PublicKey(chainCfg.usdcMint || chainCfg.usdcAddress);
+              const [fromAta, toAta] = await Promise.all([
+                getAssociatedTokenAddress(mintPk, payerPk),
+                getAssociatedTokenAddress(mintPk, recipientPk),
+              ]);
+              const { blockhash } = await conn.getLatestBlockhash();
+              const tx = new Transaction({ recentBlockhash: blockhash, feePayer: payerPk });
+              tx.add(createTransferInstruction(fromAta, toAta, payerPk, BigInt(priceAtomic), [], TOKEN_PROGRAM_ID));
+              tx.sign(solanaPayer);
+              paymentHeader = Buffer.from(tx.serialize()).toString('base64');
+            } else {
+              const viem: any = require('viem');
+              const viemAccounts: any = require('viem/accounts');
+              const viemChains: any = require('viem/chains');
+              const chainMap: Record<number, any> = {
+                8453: viemChains.base, 84532: viemChains.baseSepolia,
+                137: viemChains.polygon, 42161: viemChains.arbitrum,
+              };
+              const walletClient = viem.createWalletClient({
+                account: viemAccounts.privateKeyToAccount(evmPk),
+                chain: chainMap[chainCfg.chainId] || viemChains.base,
+                transport: viem.http(chainCfg.rpcUrl),
+              });
+              const x402Client: any = require('x402/client');
+              const x402Types: any = require('x402/types');
+              const networkToX402: Record<string, string> = {
+                'eip155:8453': 'base', 'eip155:84532': 'base-sepolia',
+                'eip155:137': 'polygon', 'eip155:42161': 'arbitrum',
+              };
+              const normalizedReq = {
+                ...accept,
+                scheme: 'exact',
+                network: networkToX402[caip2] || accept.network || 'base',
+                payTo: String(accept.payTo || '').trim(),
+                maxAmountRequired: String(priceAtomic),
+                resource: endpointUrl,
+                description: accept.description || String(prov.name || 'x402 resource'),
+                mimeType: accept.mimeType || 'application/json',
+              };
+              const parsed = x402Types.PaymentRequirementsSchema.parse(normalizedReq);
+              paymentHeader = await x402Client.createPaymentHeader(walletClient, Number(probe?.x402Version || 1), parsed);
+            }
+          } catch (err: any) {
+            lastError = `payment_header_failed:${err.message}`;
+            continue;
+          }
+
+          const isPost = method.toUpperCase() === 'POST';
+          let requestUrl = endpointUrl;
+          let requestBody: string | undefined;
+          if (isPost) {
+            const bodyObj: Record<string, any> = {};
+            if (params && typeof params === 'object') Object.assign(bodyObj, params);
+            requestBody = JSON.stringify(bodyObj);
+          } else if (params && typeof params === 'object') {
+            const qsObj: Record<string, string> = {};
+            for (const [k, v] of Object.entries(params as Record<string, any>)) {
+              qsObj[k] = String(v);
+            }
+            const qs = new URLSearchParams(qsObj).toString();
+            if (qs) requestUrl += (requestUrl.includes('?') ? '&' : '?') + qs;
+          }
+
+          try {
+            const fetchResp: Awaited<ReturnType<typeof fetch>> = await fetch(requestUrl, {
+              method: isPost ? 'POST' : 'GET',
+              headers: {
+                Accept: 'application/json',
+                'User-Agent': 'gordon-agentic/1.0',
+                'X-PAYMENT': paymentHeader,
+                'PAYMENT-SIGNATURE': paymentHeader,
+                ...(isPost ? { 'Content-Type': 'application/json' } : {}),
+              },
+              body: requestBody,
+              signal: AbortSignal.timeout(30_000),
+            });
+            const respText = await fetchResp.text();
+            const receipt = fetchResp.headers.get('payment-response') || fetchResp.headers.get('x-payment-response');
+            let respData: any;
+            try { respData = JSON.parse(respText); } catch { respData = respText; }
+
+            if (fetchResp.status === 200) {
+              let decodedReceipt: any = null;
+              if (receipt) {
+                try {
+                  const parsedMaybe = JSON.parse(receipt);
+                  if (typeof parsedMaybe === 'string') {
+                    decodedReceipt = JSON.parse(Buffer.from(parsedMaybe, 'base64').toString('utf8'));
+                  } else {
+                    decodedReceipt = parsedMaybe;
+                  }
+                } catch {
+                  try {
+                    decodedReceipt = JSON.parse(Buffer.from(receipt, 'base64').toString('utf8'));
+                  } catch {
+                    decodedReceipt = null;
+                  }
+                }
+              }
+              const settlementTxHash = decodedReceipt?.transaction || decodedReceipt?.txHash || null;
+              const settlementNetwork = decodedReceipt?.network || caip2;
+              const settlementPayer = decodedReceipt?.payer || null;
+              executionResult = {
+                paymentId,
+                status: 'completed',
+                provider: String(prov.name || prov.id),
+                providerId: prov.id,
+                action,
+                payerMode: isEvm
+                  ? (allowDemoEvmFallback && demoEvmPk ? 'demo_wallet_fallback' : 'user_wallet')
+                  : 'user_wallet',
+                network: caip2,
+                chainName: chainCfg.name,
+                priceAtomic,
+                priceUsdc: priceAtomic / 1_000_000,
+                payTo: String(accept.payTo || ''),
+                receipt: receipt ? (() => { try { return JSON.parse(receipt); } catch { return receipt; } })() : null,
+                rawReceipt: receipt,
+                settlement: {
+                  txHash: settlementTxHash,
+                  network: settlementNetwork,
+                  payer: settlementPayer,
+                  explorerUrl: settlementTxHash ? `${chainCfg.explorerUrl}${chainCfg.explorerTxPath}${settlementTxHash}` : null,
+                },
+                data: respData,
+                requestUrl,
+                executedAt: new Date().toISOString(),
+              };
+              break;
+            }
+            lastError = `http_${fetchResp.status}`;
+          } catch (err: any) {
+            lastError = `fetch_failed:${err.message}`;
+            continue;
+          }
+        }
+
+        if (!executionResult) {
+          res.status(402).json({
+            error: { code: 'PAYMENT_FAILED', message: `Payment failed after trying all accepted methods: ${lastError}` },
+            paymentId,
+            lastError,
+            acceptedNetworks: rawAccepts.map((a: any) => toCaip2(a.network || 'base')),
+          });
+          return;
+        }
+
+        await db.pool.query(
+          `INSERT INTO payment_requests (id, org_id, provider_id, action, params, max_payment_usdc, status, audit_correlation_id, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, 'completed', $7, $8) ON CONFLICT (id) DO NOTHING`,
+          [paymentId, req.org!.orgId, provider_id, action, JSON.stringify(params), executionResult.priceUsdc, `cor_${paymentId}`, new Date()],
+        );
+
+        res.json(executionResult);
+      } catch (err: any) {
+        console.error('[v1/payments/pay] Error:', err);
+        res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+      }
+    },
+  );
+
   router.get('/payments',
     requireScope('payments:read'),
     validate({ query: S.PaginationQuery }),
@@ -300,11 +617,13 @@ export function createV1Router(deps: {
     validate({ body: S.PolicyCheckBody }),
     async (req: Request, res: Response) => {
       try {
-        const { price, merchant, category, transactionType, serviceType } = req.body;
+        const { price, merchant, category, transactionType, serviceType, recipientAgent, trustScore } = req.body as any;
         const result = await policyService.checkPolicyOnlyForOrg(req.org!.orgId, {
           userId: req.org!.orgId, productId: 'dry-run',
           price: price || 0, merchant: merchant || 'unknown',
           category, transactionType: transactionType || 'agent-to-agent', serviceType,
+          recipientAgent,
+          trustScore: Number.isFinite(Number(trustScore)) ? Number(trustScore) : undefined,
         });
         res.json(result);
       } catch (err: any) {
@@ -473,7 +792,10 @@ export function createV1Router(deps: {
     requireScope('providers:read'),
     async (req: Request, res: Response) => {
       try {
-        const providers = await providerRegistry.listProviders();
+        const includeDisabled =
+          String(req.query.include_disabled || '').toLowerCase() === 'true' ||
+          String(req.query.all || '').toLowerCase() === 'true';
+        const providers = await providerRegistry.listProviders(!includeDisabled);
         res.json({ providers });
       } catch (err: any) {
         res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
@@ -977,17 +1299,32 @@ export function createV1Router(deps: {
           pool = merged.filter((item) => sourceAllow.has(String(item.source || '').toLowerCase()));
         }
         const queryTokens = q.split(/\s+/).map((t) => t.trim()).filter(Boolean);
+        const compactQuery = normalizeSearchText(q);
+        const wantsBazaar = /\bbazaar\b|\bbazz?ar\b|\bx402scout\b/.test(q);
+        const wantsOrthogonal = /\borthogonal\b|\borth\b/.test(q);
         const ranked = pool
           .map((item) => {
-            const haystack = `${item.name} ${item.description} ${item.category} ${item.url}`.toLowerCase();
+            const haystack = `${item.name} ${item.description} ${item.category} ${item.url} ${item.network} ${item.method || ''}`.toLowerCase();
+            const compactHaystack = normalizeSearchText(haystack);
+            const host = safeHostname(item.registerUrl || item.url).toLowerCase();
             const tokenHits = queryTokens.length
               ? queryTokens.filter((token) => haystack.includes(token)).length
               : 0;
             const phraseHit = q ? haystack.includes(q) : false;
-            return { item, tokenHits, phraseHit };
+            const hostHit = q ? host.includes(q) : false;
+            const compactHit = compactQuery ? compactHaystack.includes(compactQuery) : false;
+            let score = tokenHits * 8;
+            if (phraseHit) score += 18;
+            if (hostHit) score += 24;
+            if (compactHit) score += 10;
+            if (item.priceUsd != null) score += 2;
+            if (item.trustScore != null) score += Math.min(item.trustScore / 20, 5);
+            if (wantsBazaar && item.source === 'x402scout') score += 30;
+            if (wantsOrthogonal && item.source === 'orthogonal') score += 30;
+            return { item, tokenHits, phraseHit, hostHit, compactHit, score };
           })
-          .filter(({ item, tokenHits, phraseHit }) => {
-            if (q && tokenHits === 0 && !phraseHit) return false;
+          .filter(({ item, tokenHits, phraseHit, hostHit, compactHit }) => {
+            if (q && tokenHits === 0 && !phraseHit && !hostHit && !compactHit) return false;
             if (category && item.category.toLowerCase() !== category) return false;
             if (hasPrice && item.priceUsd == null) return false;
             if (Number.isFinite(minTrust)) {
@@ -996,6 +1333,7 @@ export function createV1Router(deps: {
             return true;
           })
           .sort((a, b) => {
+            if (a.score !== b.score) return b.score - a.score;
             if (a.phraseHit !== b.phraseHit) return a.phraseHit ? -1 : 1;
             return b.tokenHits - a.tokenHits;
           });
@@ -1046,7 +1384,8 @@ export function createV1Router(deps: {
         const name = String(req.body?.name || '').trim();
         const category = String(req.body?.category || '').trim();
         const preferredMethod = String(req.body?.method || '').trim().toUpperCase();
-        const requireStrict = req.body?.requireStrict !== false && req.body?.require_strict !== false;
+        const strictDefault = String(process.env.MARKETPLACE_REQUIRE_STRICT || 'false').toLowerCase() === 'true';
+        const requireStrict = req.body?.requireStrict ?? req.body?.require_strict ?? strictDefault;
 
         if (!targetUrl) {
           res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'url is required' } });
@@ -1100,6 +1439,7 @@ export function createV1Router(deps: {
         const metadata = {
           x402Native: true,
           category: category || 'utility',
+          ...(Number.isFinite(Number(req.body?.trust_score)) ? { trustScore: Number(req.body?.trust_score) } : {}),
           description: req.body?.description || `Auto-registered from marketplace: ${targetUrl}`,
           endpoints: { [action]: targetUrl },
           method: probe.method || preferredMethod || 'GET',
@@ -1253,6 +1593,8 @@ type MarketplaceService = {
   priceUsd: number | null;
   trustScore: number | null;
   source: 'x402.direct' | 'x402scout' | 'orthogonal';
+  method?: string;
+  requiredInputs?: string[];
 };
 
 async function fetchX402DirectCatalog(): Promise<MarketplaceService[]> {
@@ -1272,6 +1614,8 @@ async function fetchX402DirectCatalog(): Promise<MarketplaceService[]> {
       priceUsd: numberOrNull(normalizePriceUsd(s.priceUsd || s.price_usd)),
       trustScore: numberOrNull(s.trustScore || s.trust_score || s.scoutScore),
       source: 'x402.direct' as const,
+      method: inferMethodFromCatalogRow(s),
+      requiredInputs: inferRequiredInputsFromCatalogRow(s),
     })).filter((s: MarketplaceService) => Boolean(s.url));
   } catch {
     return [];
@@ -1295,6 +1639,8 @@ async function fetchX402ScoutCatalog(): Promise<MarketplaceService[]> {
       priceUsd: numberOrNull(normalizePriceUsd(s.priceUsd || s.price_usd)),
       trustScore: numberOrNull(s.trustScore || s.trust_score || s.scoutScore),
       source: 'x402scout' as const,
+      method: inferMethodFromCatalogRow(s),
+      requiredInputs: inferRequiredInputsFromCatalogRow(s),
     })).filter((s: MarketplaceService) => Boolean(s.url));
   } catch {
     return [];
@@ -1369,6 +1715,8 @@ function normalizeOrthogonalEndpoint(endpoint: any): MarketplaceService | null {
     priceUsd,
     trustScore: null,
     source: 'orthogonal',
+    method: String(endpoint?.method || endpoint?.httpMethod || 'POST').toUpperCase(),
+    requiredInputs: inferRequiredInputsFromCatalogRow(endpoint),
   };
 }
 
@@ -1389,6 +1737,44 @@ function dedupeMarketplaceEntries(entries: MarketplaceService[]): MarketplaceSer
     if (!byUrl.has(key)) byUrl.set(key, entry);
   }
   return [...byUrl.values()];
+}
+
+function normalizeSearchText(input: string): string {
+  return String(input || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function inferMethodFromCatalogRow(row: any): string {
+  const fromSchema =
+    row?.outputSchema?.input?.method ||
+    row?.input?.method ||
+    row?.method ||
+    row?.httpMethod ||
+    row?.accepts?.[0]?.outputSchema?.input?.method;
+  return String(fromSchema || 'GET').toUpperCase();
+}
+
+function inferRequiredInputsFromCatalogRow(row: any): string[] {
+  const out = new Set<string>();
+  const queryParams = row?.outputSchema?.input?.queryParams || row?.input?.queryParams;
+  if (queryParams && typeof queryParams === 'object') {
+    for (const [k, meta] of Object.entries(queryParams)) {
+      if ((meta as any)?.required) out.add(String(k));
+    }
+  }
+  const bodyRequired = row?.outputSchema?.input?.body?.required || row?.input?.body?.required;
+  if (Array.isArray(bodyRequired)) {
+    for (const f of bodyRequired) out.add(String(f));
+  }
+  const bodyFields = row?.outputSchema?.input?.bodyFields || row?.input?.bodyFields;
+  if (bodyFields && typeof bodyFields === 'object') {
+    for (const [k, meta] of Object.entries(bodyFields)) {
+      if ((meta as any)?.required) out.add(String(k));
+    }
+  }
+  if (Array.isArray(row?.accepts) && row.accepts[0]) {
+    for (const f of inferRequiredInputsFromCatalogRow(row.accepts[0])) out.add(f);
+  }
+  return [...out];
 }
 
 async function probeX402Endpoint(url: string, preferredMethod?: string): Promise<any> {
