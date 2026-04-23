@@ -14,7 +14,7 @@ build/
 .env
 .env.local
 .env.*.local
-
+.env.*
 # Database
 data/*.db-journal
 data/*.db-shm
