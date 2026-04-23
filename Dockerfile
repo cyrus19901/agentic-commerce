@@ -23,6 +23,7 @@ RUN npm run build --workspace=@agentic-commerce/shared && \
     npm run build --workspace=@agentic-commerce/database && \
     npm run build --workspace=@agentic-commerce/integrations && \
     npm run build --workspace=@agentic-commerce/core && \
+    npm run build --workspace=@agentic-commerce/mcp-server && \
     npm run build --workspace=@agentic-commerce/api
 
 # Production stage
