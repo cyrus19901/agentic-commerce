@@ -17,11 +17,12 @@ RUN npm install
 # Copy source code
 COPY . .
 
-# Build packages in correct order (shared -> database -> others)
+# Build packages in dependency order: shared -> database -> integrations -> core -> api
+# (core imports types from integrations, so integrations must be built first)
 RUN npm run build --workspace=@agentic-commerce/shared && \
     npm run build --workspace=@agentic-commerce/database && \
-    npm run build --workspace=@agentic-commerce/core && \
     npm run build --workspace=@agentic-commerce/integrations && \
+    npm run build --workspace=@agentic-commerce/core && \
     npm run build --workspace=@agentic-commerce/api
 
 # Production stage
