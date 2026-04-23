@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gordon — Login</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@400;600;700&display=swap');
+    :root {
+      --bg: #06060c;
+      --surface: #0c0c18;
+      --surface-2: #111124;
+      --border: #1e1e44;
+      --text: #eaeaff;
+      --muted: #8080bb;
+      --blue: #635bff;
+      --cyan: #00e5ff;
+      --green: #1af0a0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .card {
+      width: 100%;
+      max-width: 760px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 22px;
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    p { margin: 0 0 16px; color: var(--muted); }
+    .row { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    input {
+      flex: 1;
+      min-width: 180px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      padding: 10px 12px;
+      font-size: 13px;
+    }
+    button {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-weight: 700;
+      cursor: pointer;
+      background: linear-gradient(135deg, var(--blue), var(--cyan));
+      color: #000;
+    }
+    .muted-btn {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .status {
+      margin-top: 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface-2);
+      padding: 10px 12px;
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      color: var(--muted);
+      min-height: 42px;
+      white-space: pre-wrap;
+    }
+    .ok { color: var(--green); }
+    .kvs {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 6px 10px;
+      font-size: 12px;
+    }
+    .kvs .k { color: var(--muted); }
+    .kvs .v { font-family: 'Space Mono', monospace; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Buyer Login & Onboarding</h1>
+    <p>Login, verify email, provision user wallet, and issue a real Gordon API key for dashboard usage.</p>
+
+    <div class="row">
+      <input id="email" type="email" placeholder="buyer@company.com">
+      <input id="name" type="text" placeholder="Buyer Name">
+      <button onclick="requestOtp()">Request OTP</button>
+    </div>
+    <div class="row">
+      <input id="otp" type="text" placeholder="Enter OTP">
+      <button onclick="verifyOtp()">Verify OTP</button>
+      <button class="muted-btn" onclick="createApiKey()">Issue API Key</button>
+      <button onclick="goDashboard()">Continue to Dashboard</button>
+    </div>
+    <div class="status" id="status">Ready.</div>
+    <div class="kvs" id="details"></div>
+  </div>
+
+  <script>
+    const API_BASE = 'http://localhost:3001';
+    const PLATFORM_BOOTSTRAP_KEY = localStorage.getItem('gordon_platform_key') || 'ak_demo_live_test_key_2024';
+    let userSession = JSON.parse(localStorage.getItem('gordon_user_session') || 'null');
+
+    function setStatus(msg, ok=false) {
+      const el = document.getElementById('status');
+      el.textContent = msg;
+      el.className = 'status' + (ok ? ' ok' : '');
+    }
+
+    function renderDetails() {
+      const details = document.getElementById('details');
+      if (!userSession) {
+        details.innerHTML = '<div class="k">Session</div><div class="v">Not authenticated</div>';
+        return;
+      }
+      details.innerHTML = `
+        <div class="k">Email</div><div class="v">${userSession.email || '—'}</div>
+        <div class="k">User ID</div><div class="v">${userSession.userId || '—'}</div>
+        <div class="k">Wallet</div><div class="v">${userSession.walletAddress || '—'}</div>
+        <div class="k">Buyer API Key</div><div class="v">${userSession.apiKey || 'Not issued yet'}</div>
+      `;
+    }
+
+    async function requestOtp() {
+      try {
+        const email = document.getElementById('email').value.trim().toLowerCase();
+        const name = document.getElementById('name').value.trim();
+        if (!email) throw new Error('Email is required');
+        const r = await fetch(`${API_BASE}/api/auth/request-otp`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, name }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Failed to request OTP');
+        document.getElementById('otp').value = data.otp || '';
+        setStatus(`OTP generated for ${email}.`, true);
+      } catch (e) {
+        setStatus(`OTP request failed: ${e.message}`);
+      }
+    }
+
+    async function verifyOtp() {
+      try {
+        const email = document.getElementById('email').value.trim().toLowerCase();
+        const name = document.getElementById('name').value.trim();
+        const otp = document.getElementById('otp').value.trim();
+        if (!email || !otp) throw new Error('Email and OTP are required');
+
+        const verifyResp = await fetch(`${API_BASE}/api/auth/verify-otp`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, otp }),
+        });
+        const verifyData = await verifyResp.json();
+        if (!verifyResp.ok) throw new Error(verifyData.error || 'OTP verification failed');
+
+        const createResp = await fetch(`${API_BASE}/api/auth/create-user`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, name }),
+        });
+        const createData = await createResp.json();
+        if (!createResp.ok) throw new Error(createData.error || 'User provisioning failed');
+
+        userSession = {
+          email,
+          userId: createData?.user?.id || verifyData?.user?.id || null,
+          walletAddress: createData?.user?.wallet?.publicKey || null,
+          apiKey: userSession?.apiKey || null,
+        };
+        localStorage.setItem('gordon_user_session', JSON.stringify(userSession));
+        setStatus('User authenticated and wallet provisioned.', true);
+        renderDetails();
+      } catch (e) {
+        setStatus(`Verify failed: ${e.message}`);
+      }
+    }
+
+    async function createApiKey() {
+      try {
+        if (!userSession?.email) throw new Error('Verify user first');
+        const r = await fetch(`${API_BASE}/api/v1/orgs/me/api-keys`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-Key': PLATFORM_BOOTSTRAP_KEY,
+          },
+          body: JSON.stringify({
+            name: `Buyer Key (${userSession.email})`,
+            scopes: ['*'],
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data?.error?.message || data.error || 'Key issuance failed');
+        userSession.apiKey = data.key;
+        localStorage.setItem('gordon_user_session', JSON.stringify(userSession));
+        localStorage.setItem('gordon_buyer_api_key', data.key);
+        setStatus('Buyer API key issued and stored for dashboard.', true);
+        renderDetails();
+      } catch (e) {
+        setStatus(`API key issuance failed: ${e.message}`);
+      }
+    }
+
+    function goDashboard() {
+      if (!userSession?.email) {
+        setStatus('Please verify login first.');
+        return;
+      }
+      if (!userSession?.apiKey) {
+        setStatus('Please issue a buyer API key first.');
+        return;
+      }
+      window.location.href = '/dashboard';
+    }
+
+    renderDetails();
+  </script>
+</body>
+</html>

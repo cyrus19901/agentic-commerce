@@ -16,10 +16,10 @@ build/
 .env.*.local
 
 # Database
-data/*.db
 data/*.db-journal
 data/*.db-shm
 data/*.db-wal
+# Keep packages/api/data/shopping.db tracked for Docker seeding
 *.sqlite
 *.sqlite3
 
@@ -57,3 +57,4 @@ temp/
 .npm
 .yarn
 .pnp.*
+.pnpm-store/

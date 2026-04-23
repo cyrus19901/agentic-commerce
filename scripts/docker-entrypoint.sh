@@ -3,17 +3,21 @@ set -e
 
 echo "🚀 Starting Agentic Commerce API..."
 
-# Create data directory if it doesn't exist
-mkdir -p /app/data
-
-# Check if database exists, if not, set it up
-if [ ! -f "/app/data/shopping.db" ]; then
-  echo "📦 Setting up database..."
-  npm run db:setup
-  echo "✓ Database setup complete"
+if [ -z "$DATABASE_URL" ]; then
+  echo "❌ DATABASE_URL is required"
+  exit 1
 fi
 
-# Start the application
+echo "🔄 Running database migrations..."
+npm run db:migrate --workspace=@agentic-commerce/database
+echo "✓ Migrations complete"
+
+# Print auth mode
+if [ "${DISABLE_AUTH}" = "true" ]; then
+  echo "⚠️  Auth disabled (DISABLE_AUTH=true) - pass user_email in requests"
+else
+  echo "✓ Auth enabled - JWT tokens required"
+fi
+
 echo "✓ Starting server on port ${PORT:-3000}..."
 exec "$@"
-

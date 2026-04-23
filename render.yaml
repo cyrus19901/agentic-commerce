@@ -12,10 +12,26 @@ services:
         value: production
       - key: DATABASE_URL
         value: /data/shopping.db
+      - key: DATABASE_PATH
+        value: /data/shopping.db
       - key: JWT_SECRET
         generateValue: true
+      - key: USE_MOCK_PAYMENTS
+        value: false
+      - key: ALLOWED_ORIGINS
+        value: https://chat.openai.com,https://chatgpt.com
       - key: STRIPE_SECRET_KEY
-        sync: false  # You'll need to set this manually in Render dashboard
+        sync: false  # Set this manually in Render dashboard
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false  # Set this manually in Render dashboard
+      - key: SOLANA_CLUSTER
+        value: devnet  # Use 'mainnet-beta' for production
+      - key: SOLANA_RPC_DEVNET
+        value: https://solana-devnet.g.alchemy.com/v2/ZJmVXF-LVxv651ws9azjqBr6Upv_l9_5
+      - key: SOLANA_RPC_MAINNET
+        sync: false  # Optional: Set if using mainnet
+      - key: API_URL
+        value: https://agentic-commerce-api.onrender.com  # Update this after deployment with your actual Render URL
     disk:
       name: agentic-commerce-data
       mountPath: /data

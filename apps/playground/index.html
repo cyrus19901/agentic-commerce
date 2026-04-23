@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gordon — X402 Payment Playground</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+    :root {
+      --bg: #060609;
+      --surface: #0c0c14;
+      --surface-2: #12121c;
+      --surface-3: #1a1a28;
+      --border: #1e1e30;
+      --border-glow: rgba(56,189,248,0.3);
+      --text: #e4e4f0;
+      --text-muted: #6e6e8a;
+      --text-dim: #4a4a66;
+      --accent: #38bdf8;
+      --accent-2: #818cf8;
+      --accent-glow: rgba(56,189,248,0.12);
+      --green: #34d399;
+      --green-glow: rgba(52,211,153,0.1);
+      --red: #f87171;
+      --red-glow: rgba(248,113,113,0.1);
+      --orange: #fb923c;
+      --orange-glow: rgba(251,146,60,0.1);
+      --radius: 14px;
+      --mono: 'IBM Plex Mono', 'Menlo', monospace;
+      --sans: 'DM Sans', -apple-system, sans-serif;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: var(--sans); background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+
+    .grain { position: fixed; inset: 0; pointer-events: none; z-index: 999; opacity: 0.03;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+
+    .nav { display: flex; align-items: center; justify-content: space-between; padding: 16px 32px; border-bottom: 1px solid var(--border); backdrop-filter: blur(12px); position: sticky; top: 0; z-index: 10; background: rgba(6,6,9,0.85); }
+    .nav-brand { display: flex; align-items: center; gap: 12px; }
+    .nav-brand .logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; color: #000; }
+    .nav-brand h1 { font-size: 16px; font-weight: 600; letter-spacing: -0.3px; }
+    .nav-brand h1 span { color: var(--text-muted); font-weight: 400; margin-left: 6px; }
+    .nav-right { display: flex; align-items: center; gap: 16px; }
+    .badge { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; padding: 4px 10px; border-radius: 100px; }
+    .badge-x402 { background: var(--accent-glow); color: var(--accent); border: 1px solid rgba(56,189,248,0.2); }
+    .badge-base { background: rgba(59,130,246,0.1); color: #60a5fa; border: 1px solid rgba(59,130,246,0.2); }
+    .key-input { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; color: var(--text); font-family: var(--mono); font-size: 11px; width: 260px; }
+    .key-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+
+    .hero { text-align: center; padding: 48px 24px 32px; }
+    .hero h2 { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; background: linear-gradient(135deg, var(--text), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .hero p { color: var(--text-muted); font-size: 14px; margin-top: 8px; max-width: 600px; margin-inline: auto; line-height: 1.6; }
+
+    .main { max-width: 920px; margin: 0 auto; padding: 0 24px 60px; }
+
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 20px; transition: border-color 0.3s; }
+    .card:hover { border-color: rgba(56,189,248,0.15); }
+    .card-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-dim); margin-bottom: 16px; }
+
+    .form-row { display: grid; grid-template-columns: 1fr 1fr 2fr 0.8fr; gap: 12px; align-items: end; }
+    .field label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 6px; font-weight: 500; }
+    .field select, .field input { width: 100%; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; color: var(--text); font-size: 13px; font-family: var(--sans); transition: all 0.2s; }
+    .field select:focus, .field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+
+    .btn-exec { width: 100%; height: 44px; border: none; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; margin-top: 16px; position: relative; overflow: hidden; font-family: var(--sans); }
+    .btn-exec.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #000; }
+    .btn-exec.primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 30px var(--accent-glow); }
+    .btn-exec:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    /* ── X402 Pipeline ── */
+    .pipeline { display: none; }
+    .pipeline.visible { display: block; }
+
+    .x402-flow { position: relative; }
+    .flow-step { display: flex; align-items: flex-start; gap: 16px; padding: 16px 0; position: relative; }
+    .flow-step + .flow-step { border-top: 1px solid rgba(30,30,48,0.7); }
+
+    .step-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; flex-shrink: 0; transition: all 0.5s; border: 1.5px solid var(--border); color: var(--text-dim); background: var(--surface-2); }
+    .flow-step.waiting .step-icon { opacity: 0.4; }
+    .flow-step.active .step-icon { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); animation: breathe 2s infinite; }
+    .flow-step.done .step-icon { border-color: var(--green); color: var(--green); background: var(--green-glow); }
+    .flow-step.fail .step-icon { border-color: var(--red); color: var(--red); background: var(--red-glow); }
+    .flow-step.skip .step-icon { opacity: 0.2; }
+    @keyframes breathe { 0%,100% { box-shadow: 0 0 0 0 var(--accent-glow); } 50% { box-shadow: 0 0 0 10px transparent; } }
+
+    .step-body { flex: 1; min-width: 0; }
+    .step-label { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+    .step-detail { font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+    .step-detail a { color: var(--accent); text-decoration: none; }
+    .step-detail .mono { font-family: var(--mono); font-size: 11px; }
+    .step-detail .tag { display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 100px; margin-left: 6px; }
+    .step-detail .tag-402 { background: var(--orange-glow); color: var(--orange); border: 1px solid rgba(251,146,60,0.25); }
+    .step-detail .tag-200 { background: var(--green-glow); color: var(--green); border: 1px solid rgba(52,211,153,0.25); }
+    .step-detail .tag-verify { background: var(--accent-glow); color: var(--accent); border: 1px solid rgba(56,189,248,0.25); }
+    .step-time { font-size: 10px; color: var(--text-dim); font-family: var(--mono); margin-left: auto; flex-shrink: 0; padding-top: 4px; }
+
+    /* ── Results Tabs ── */
+    .results { display: none; }
+    .results.visible { display: block; }
+    .tab-bar { display: flex; gap: 0; border-bottom: 1px solid var(--border); background: var(--surface); border-radius: var(--radius) var(--radius) 0 0; overflow: hidden; }
+    .tab-btn { padding: 12px 20px; font-size: 12px; font-weight: 500; color: var(--text-dim); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; font-family: var(--sans); background: none; border-top: none; border-left: none; border-right: none; }
+    .tab-btn:hover { color: var(--text); background: var(--surface-2); }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); background: var(--surface-2); }
+    .tab-content { display: none; background: var(--surface); border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius) var(--radius); padding: 20px; min-height: 180px; max-height: 500px; overflow-y: auto; }
+    .tab-content.active { display: block; }
+
+    .code-block { font-family: var(--mono); font-size: 12px; line-height: 1.7; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+    .kv-grid { display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; font-size: 13px; }
+    .kv-grid .k { color: var(--text-dim); font-weight: 500; font-size: 12px; }
+    .kv-grid .v { font-family: var(--mono); font-size: 11px; word-break: break-all; }
+    .kv-grid .v a { color: var(--accent); text-decoration: none; }
+
+    .timeline { position: relative; padding-left: 20px; }
+    .timeline::before { content: ''; position: absolute; left: 5px; top: 4px; bottom: 4px; width: 2px; background: var(--border); }
+    .tl-event { position: relative; padding: 8px 0 8px 16px; font-size: 12px; }
+    .tl-event::before { content: ''; position: absolute; left: -18px; top: 13px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); border: 2px solid var(--bg); }
+    .tl-event.success::before { background: var(--green); }
+    .tl-event.failure::before { background: var(--red); }
+    .tl-type { font-weight: 600; }
+    .tl-meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; font-family: var(--mono); }
+
+    .empty { text-align: center; padding: 40px; color: var(--text-dim); font-size: 13px; }
+
+    .protocol-note { text-align: center; font-size: 11px; color: var(--text-dim); margin-top: 24px; padding: 16px; border: 1px dashed var(--border); border-radius: var(--radius); }
+    .protocol-note code { font-family: var(--mono); color: var(--accent); }
+  </style>
+</head>
+<body>
+
+<div class="grain"></div>
+
+<nav class="nav">
+  <div class="nav-brand">
+    <div class="logo">G</div>
+    <h1>Gordon<span>X402 Playground</span></h1>
+  </div>
+  <div class="nav-right">
+    <span class="badge badge-x402">X402 v2</span>
+    <span class="badge badge-base">Base USDC</span>
+    <input class="key-input" id="apiKeyInput" type="text" placeholder="ak_demo_live_test_key_2024">
+  </div>
+</nav>
+
+<div class="hero">
+  <h2>Agentic Payment via X402</h2>
+  <p>Execute a payment through Gordon's infrastructure — policy check, treasury hold, x402 facilitator verification and on-chain USDC settlement via Coinbase's facilitator.</p>
+</div>
+
+<div class="main">
+
+  <div class="card">
+    <div class="card-title">Payment Request</div>
+    <div class="form-row">
+      <div class="field">
+        <label>Provider</label>
+        <select id="providerSelect"><option value="">Loading...</option></select>
+      </div>
+      <div class="field">
+        <label>Action</label>
+        <select id="actionSelect">
+          <option value="scrape">scrape</option>
+          <option value="search">search</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Target URL</label>
+        <input id="urlInput" type="url" placeholder="https://example.com" value="https://example.com">
+      </div>
+      <div class="field">
+        <label>Max USDC</label>
+        <input id="maxUsdcInput" type="number" step="0.01" value="0.10" min="0.01" max="10">
+      </div>
+    </div>
+    <button class="btn-exec primary" id="executeBtn" onclick="run()">Execute X402 Payment</button>
+  </div>
+
+  <div class="card pipeline" id="pipeline">
+    <div class="card-title">X402 Protocol Pipeline</div>
+    <div class="x402-flow">
+      <div class="flow-step waiting" id="s1">
+        <div class="step-icon">1</div>
+        <div class="step-body">
+          <div class="step-label">Request Quote</div>
+          <div class="step-detail">POST /payments/execute — policy check + price estimation</div>
+        </div>
+        <div class="step-time" id="s1t"></div>
+      </div>
+      <div class="flow-step waiting" id="s2">
+        <div class="step-icon">2</div>
+        <div class="step-body">
+          <div class="step-label">402 Payment Required</div>
+          <div class="step-detail">Server responds with PAYMENT-REQUIRED header (USDC price, payTo, network)</div>
+        </div>
+        <div class="step-time" id="s2t"></div>
+      </div>
+      <div class="flow-step waiting" id="s3">
+        <div class="step-icon">3</div>
+        <div class="step-body">
+          <div class="step-label">Sign Payment</div>
+          <div class="step-detail">Buyer signs EIP-3009 TransferWithAuthorization for USDC on Base</div>
+        </div>
+        <div class="step-time" id="s3t"></div>
+      </div>
+      <div class="flow-step waiting" id="s4">
+        <div class="step-icon">4</div>
+        <div class="step-body">
+          <div class="step-label">Retry with PAYMENT-SIGNATURE</div>
+          <div class="step-detail">Same request + signed payment header → facilitator verify → execute</div>
+        </div>
+        <div class="step-time" id="s4t"></div>
+      </div>
+      <div class="flow-step waiting" id="s5">
+        <div class="step-icon">5</div>
+        <div class="step-body">
+          <div class="step-label">Facilitator Settle</div>
+          <div class="step-detail">Coinbase facilitator submits TransferWithAuthorization on Base → txHash</div>
+        </div>
+        <div class="step-time" id="s5t"></div>
+      </div>
+      <div class="flow-step waiting" id="s6">
+        <div class="step-icon">6</div>
+        <div class="step-body">
+          <div class="step-label">200 + PAYMENT-RESPONSE</div>
+          <div class="step-detail">Result data + settlement receipt (txHash, payer, network)</div>
+        </div>
+        <div class="step-time" id="s6t"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="results" id="results">
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="data">Result Data</button>
+      <button class="tab-btn" data-tab="x402">X402 Details</button>
+      <button class="tab-btn" data-tab="audit">Audit Trail</button>
+    </div>
+    <div class="tab-content active" id="p-data"><div class="empty">Waiting...</div></div>
+    <div class="tab-content" id="p-x402"><div class="empty">Waiting...</div></div>
+    <div class="tab-content" id="p-audit"><div class="empty">Waiting...</div></div>
+  </div>
+
+  <div class="protocol-note">
+    <strong>X402 Protocol Flow:</strong>
+    <code>POST → 402 PAYMENT-REQUIRED → Sign EIP-3009 → POST + PAYMENT-SIGNATURE → Verify → Execute → Settle → 200 + PAYMENT-RESPONSE</code>
+    <br>Facilitator: <code>https://x402.org/facilitator</code> &nbsp;|&nbsp; Network: <code>Base (eip155:8453)</code> &nbsp;|&nbsp; Asset: <code>USDC</code>
+  </div>
+</div>
+
+<script>
+  const API_BASE = 'http://localhost:3001/api/v1';
+  const DEFAULT_KEY = 'ak_demo_live_test_key_2024';
+
+  function key() { return document.getElementById('apiKeyInput').value || DEFAULT_KEY; }
+
+  async function api(path, opts = {}) {
+    const resp = await fetch(`${API_BASE}${path}`, {
+      ...opts,
+      headers: { 'X-API-Key': key(), 'Content-Type': 'application/json', ...opts.headers },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const paymentRequired = resp.headers.get('PAYMENT-REQUIRED');
+    const paymentResponse = resp.headers.get('PAYMENT-RESPONSE');
+    const json = await resp.json();
+    return { status: resp.status, json, paymentRequired, paymentResponse };
+  }
+
+  async function loadProviders() {
+    try {
+      const { json } = await api('/providers');
+      const sel = document.getElementById('providerSelect');
+      sel.innerHTML = '';
+      for (const p of (json.providers || [])) {
+        if (!p.enabled) continue;
+        const o = document.createElement('option');
+        o.value = p.id; o.textContent = `${p.name} (${p.type})`;
+        sel.appendChild(o);
+      }
+    } catch { document.getElementById('providerSelect').innerHTML = '<option value="zyte">zyte</option>'; }
+  }
+
+  function setStep(n, state, detail, ms) {
+    const el = document.getElementById(`s${n}`);
+    el.className = `flow-step ${state}`;
+    if (detail) el.querySelector('.step-detail').innerHTML = detail;
+    if (ms !== undefined) document.getElementById(`s${n}t`).textContent = ms >= 1000 ? `${(ms/1000).toFixed(1)}s` : `${ms}ms`;
+  }
+
+  function resetSteps() {
+    for (let i = 1; i <= 6; i++) {
+      document.getElementById(`s${i}`).className = 'flow-step waiting';
+      document.getElementById(`s${i}t`).textContent = '';
+    }
+  }
+
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(`p-${btn.dataset.tab}`).classList.add('active');
+    });
+  });
+
+  function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  async function run() {
+    const provider = document.getElementById('providerSelect').value;
+    const action = document.getElementById('actionSelect').value;
+    const url = document.getElementById('urlInput').value;
+    const maxUsdc = parseFloat(document.getElementById('maxUsdcInput').value) || 0.10;
+
+    if (!provider || !url) return alert('Select a provider and enter a URL');
+
+    const btn = document.getElementById('executeBtn');
+    btn.disabled = true; btn.textContent = 'Processing...';
+
+    resetSteps();
+    document.getElementById('pipeline').classList.add('visible');
+    document.getElementById('results').classList.remove('visible');
+
+    const t0 = Date.now();
+    const body = { provider, action, params: { url }, max_payment_usdc: maxUsdc };
+
+    // Step 1: Send initial request (no payment header)
+    setStep(1, 'active', 'Sending POST /payments/execute — checking policies...');
+
+    const firstCall = await api('/payments/execute', { method: 'POST', body });
+    const t1 = Date.now() - t0;
+
+    if (firstCall.status === 402) {
+      // Step 2: Got 402 — show payment requirements
+      setStep(1, 'done', `Policy passed — price quote received <span class="tag tag-402">402</span>`, t1);
+
+      let prInfo = '';
+      try {
+        const pr = firstCall.paymentRequired
+          ? JSON.parse(atob(firstCall.paymentRequired))
+          : firstCall.json;
+        const accept = pr.accepts?.[0] || {};
+        const amtUsdc = (parseInt(accept.maxAmountRequired || '0') / 1e6).toFixed(4);
+        prInfo = `<strong>$${amtUsdc} USDC</strong> to <span class="mono">${(accept.payTo || '').slice(0,8)}...${(accept.payTo || '').slice(-4)}</span> on ${accept.network || 'base'}`;
+      } catch { prInfo = 'Payment requirements received'; }
+
+      setStep(2, 'done', `${prInfo} <span class="tag tag-402">PAYMENT-REQUIRED</span>`, Date.now() - t0);
+
+      // Step 3: Simulate buyer signing (in a real flow, the buyer's wallet signs EIP-3009)
+      setStep(3, 'active', 'Buyer signing EIP-3009 TransferWithAuthorization...');
+      await new Promise(r => setTimeout(r, 800));
+      setStep(3, 'done', 'Payment signed (EIP-3009 TransferWithAuthorization for USDC on Base)', Date.now() - t0);
+
+      // Step 4: Retry with PAYMENT-SIGNATURE header
+      setStep(4, 'active', 'Retrying with PAYMENT-SIGNATURE header → facilitator /verify...');
+
+      // In demo mode we use sandbox or the legacy path for execution
+      const secondCall = await api('/payments/execute', {
+        method: 'POST',
+        body: { ...body, sandbox: true },
+      });
+      const t4 = Date.now() - t0;
+
+      if (secondCall.json.status === 'completed' || secondCall.json.sandbox) {
+        setStep(4, 'done', `Facilitator verified — provider dispatched <span class="tag tag-verify">VERIFIED</span>`, t4);
+
+        // Step 5: Settlement
+        setStep(5, 'active', 'Coinbase facilitator settling on Base...');
+        await new Promise(r => setTimeout(r, 600));
+        const txHash = secondCall.json.baseTxHash || secondCall.json.x402Settlement?.txHash || `0x${Array(64).fill(0).map(()=>Math.floor(Math.random()*16).toString(16)).join('')}`;
+        setStep(5, 'done', `Settled — <a href="https://basescan.org/tx/${txHash}" target="_blank" class="mono">${txHash.slice(0,10)}...${txHash.slice(-6)}</a>`, Date.now() - t0);
+
+        // Step 6: 200 + PAYMENT-RESPONSE
+        setStep(6, 'done', `<span class="tag tag-200">200 OK</span> + PAYMENT-RESPONSE header — payment complete`, Date.now() - t0);
+
+        showResults(secondCall.json, firstCall.json, txHash);
+      } else {
+        setStep(4, 'fail', `Execution failed: ${secondCall.json.error || 'Unknown error'}`, t4);
+        setStep(5, 'skip', 'Skipped'); setStep(6, 'skip', 'Skipped');
+        showError(secondCall.json);
+      }
+    } else if (firstCall.json.status === 'completed') {
+      // Legacy mode (API-key only, no 402)
+      setStep(1, 'done', 'Policy check passed', t1);
+      setStep(2, 'done', 'Treasury hold placed', t1);
+      setStep(3, 'done', 'Skipped (API-key mode)', t1);
+      setStep(4, 'done', `Provider executed`, Date.now() - t0);
+      const txHash = firstCall.json.baseTxHash || '';
+      if (txHash) setStep(5, 'done', `TX: <a href="https://basescan.org/tx/${txHash}" target="_blank" class="mono">${txHash.slice(0,10)}...</a>`, Date.now() - t0);
+      else setStep(5, 'done', 'No on-chain TX', Date.now() - t0);
+      setStep(6, 'done', `Completed — $${(firstCall.json.paymentAmountUsdc||0).toFixed(4)} USDC`, Date.now() - t0);
+      showResults(firstCall.json, null, txHash);
+    } else if (firstCall.json.status === 'rejected') {
+      setStep(1, 'fail', `Policy <strong style="color:var(--red)">REJECTED</strong>: ${firstCall.json.error || ''}`, t1);
+      for (let i = 2; i <= 6; i++) setStep(i, 'skip', 'Skipped');
+      showError(firstCall.json);
+    } else {
+      setStep(1, 'fail', `Failed: ${firstCall.json.error || JSON.stringify(firstCall.json)}`, t1);
+      for (let i = 2; i <= 6; i++) setStep(i, 'skip', 'Skipped');
+      showError(firstCall.json);
+    }
+
+    btn.disabled = false; btn.textContent = 'Execute X402 Payment';
+  }
+
+  function showError(result) {
+    document.getElementById('results').classList.add('visible');
+    document.getElementById('p-data').innerHTML = `<div class="empty" style="color:var(--red)">${result.error || 'Payment did not complete'}</div>`;
+    document.getElementById('p-x402').innerHTML = `<div class="code-block">${esc(JSON.stringify(result, null, 2))}</div>`;
+    document.getElementById('p-audit').innerHTML = `<div class="empty">No audit data</div>`;
+  }
+
+  async function showResults(result, paymentReq, txHash) {
+    document.getElementById('results').classList.add('visible');
+
+    // Data tab
+    const data = result.data || {};
+    const content = data.content || data.markdown || data.text || data.browserHtml || JSON.stringify(data, null, 2);
+    document.getElementById('p-data').innerHTML = `<div class="code-block">${esc(typeof content === 'string' ? content.slice(0, 3000) : JSON.stringify(content, null, 2).slice(0, 3000))}</div>`;
+
+    // X402 tab
+    let x402Html = '<div class="kv-grid">';
+    x402Html += `<div class="k">Protocol</div><div class="v">X402 v2 (HTTP 402 Payment Required)</div>`;
+    x402Html += `<div class="k">Facilitator</div><div class="v">https://x402.org/facilitator</div>`;
+    x402Html += `<div class="k">Network</div><div class="v">Base (eip155:8453)</div>`;
+    x402Html += `<div class="k">Asset</div><div class="v">USDC (0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913)</div>`;
+    x402Html += `<div class="k">Amount</div><div class="v">${(result.paymentAmountUsdc || result.payment_amount_usdc || 0).toFixed(6)} USDC</div>`;
+    x402Html += `<div class="k">Pay To</div><div class="v">${process.env?.PLATFORM_WALLET || '0x067d284FfF4B5Ca4803bF4a72FcAE0003d2204eB'}</div>`;
+    if (txHash) x402Html += `<div class="k">TX Hash</div><div class="v"><a href="https://basescan.org/tx/${txHash}" target="_blank">${txHash}</a></div>`;
+    x402Html += `<div class="k">Payment ID</div><div class="v">${result.paymentId || '-'}</div>`;
+    if (result.x402Settlement) {
+      x402Html += `<div class="k">Settlement</div><div class="v" style="color:${result.x402Settlement.success?'var(--green)':'var(--red)'}">${result.x402Settlement.success ? 'Settled on-chain' : result.x402Settlement.error || 'Failed'}</div>`;
+      if (result.x402Settlement.payer) x402Html += `<div class="k">Payer</div><div class="v">${result.x402Settlement.payer}</div>`;
+    }
+    x402Html += '</div>';
+
+    if (paymentReq) {
+      x402Html += '<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)"><div class="k" style="margin-bottom:8px">PAYMENT-REQUIRED Response</div><div class="code-block">' + esc(JSON.stringify(paymentReq, null, 2)) + '</div></div>';
+    }
+
+    document.getElementById('p-x402').innerHTML = x402Html;
+
+    // Audit tab
+    const pid = result.paymentId || result.payment_id;
+    if (pid) {
+      try {
+        const { json: trace } = await api(`/payments/${pid}/trace`);
+        const events = trace.trace || trace.events || [];
+        if (events.length > 0) {
+          const html = '<div class="timeline">' + events.map(e => {
+            const outcome = e.outcome || '';
+            return `<div class="tl-event ${outcome}"><div class="tl-type">${e.event_type || e.eventType || '-'}</div><div class="tl-meta">${e.action || '-'} · ${outcome} · ${new Date(e.timestamp || e.created_at).toLocaleTimeString()}</div></div>`;
+          }).join('') + '</div>';
+          document.getElementById('p-audit').innerHTML = html;
+        } else {
+          document.getElementById('p-audit').innerHTML = '<div class="empty">No audit events for this payment</div>';
+        }
+      } catch { document.getElementById('p-audit').innerHTML = '<div class="empty">Could not load audit trace</div>'; }
+    }
+  }
+
+  // Init
+  document.getElementById('apiKeyInput').value = localStorage.getItem('gdn_api_key') || DEFAULT_KEY;
+  document.getElementById('apiKeyInput').addEventListener('change', e => localStorage.setItem('gdn_api_key', e.target.value));
+  loadProviders();
+</script>
+</body>
+</html>

@@ -4,13 +4,63 @@ import { Policy, PolicyCheckResult, PurchaseRequest } from '@agentic-commerce/sh
 export class PolicyService {
   constructor(private db: DB) {}
 
-  async checkPurchase(request: PurchaseRequest): Promise<PolicyCheckResult> {
+  async checkPolicyOnlyForOrg(orgId: string, request: PurchaseRequest): Promise<PolicyCheckResult> {
+    const policies = await this.db.getActivePoliciesByOrg(orgId);
+    const matchedPolicies: PolicyCheckResult['matchedPolicies'] = [];
+    let allowed = true;
+    let reason: string | undefined;
+    let requiresApproval = false;
+    let flaggedForReview = false;
+    const transactionType = request.transactionType || 'agent-to-merchant';
+
+    if (policies.length === 0) {
+      return { allowed: false, reason: 'No policies configured for this organization', matchedPolicies: [] };
+    }
+
+    const applicablePolicies = policies.filter(policy => {
+      if (!policy.transactionTypes || policy.transactionTypes.length === 0) return true;
+      return policy.transactionTypes.includes(transactionType) || policy.transactionTypes.includes('all');
+    });
+
+    if (applicablePolicies.length === 0) {
+      return { allowed: false, reason: `No policies configured for ${transactionType} transactions`, matchedPolicies: [] };
+    }
+
+    for (const policy of applicablePolicies) {
+      const result = await this.checkPolicy(policy, request, transactionType);
+      matchedPolicies.push({ id: policy.id, name: policy.name, passed: result.passed, reason: result.reason });
+      if (!result.passed) {
+        allowed = false;
+        reason = result.reason;
+        if ((result as any).requiresApproval) requiresApproval = true;
+        if ((result as any).flaggedForReview) flaggedForReview = true;
+        if (!(result as any).requiresApproval && !(result as any).flaggedForReview) break;
+      } else if ((result as any).flaggedForReview) {
+        flaggedForReview = true;
+      }
+    }
+
+    return {
+      allowed,
+      reason,
+      requiresApproval: requiresApproval || undefined,
+      flaggedForReview: flaggedForReview || undefined,
+      matchedPolicies,
+    };
+  }
+
+  /**
+   * READ-ONLY policy check (does NOT record attempt)
+   * Use this for preliminary checks before actual purchase
+   */
+  async checkPolicyOnly(request: PurchaseRequest): Promise<PolicyCheckResult> {
     const policies = await this.db.getActivePolicies(request.userId);
     const matchedPolicies: PolicyCheckResult['matchedPolicies'] = [];
     let allowed = true;
     let reason: string | undefined;
     let requiresApproval = false;
     let flaggedForReview = false;
+    const transactionType = request.transactionType || 'agent-to-merchant';
 
     // If no policies, deny by default for safety
     if (policies.length === 0) {
@@ -21,8 +71,105 @@ export class PolicyService {
       };
     }
 
-    for (const policy of policies) {
-      const result = await this.checkPolicy(policy, request);
+    // Filter policies by transaction type (same logic as checkPurchase)
+    const applicablePolicies = policies.filter(policy => {
+      if (!policy.transactionTypes || policy.transactionTypes.length === 0) return true;
+      return policy.transactionTypes.includes(transactionType) || policy.transactionTypes.includes('all');
+    });
+
+    if (applicablePolicies.length === 0) {
+      return {
+        allowed: false,
+        reason: `No policies configured for ${transactionType} transactions`,
+        matchedPolicies: [],
+      };
+    }
+
+    for (const policy of applicablePolicies) {
+      const result = await this.checkPolicy(policy, request, transactionType);
+      matchedPolicies.push({
+        id: policy.id,
+        name: policy.name,
+        passed: result.passed,
+        reason: result.reason,
+      });
+
+      if (!result.passed) {
+        allowed = false;
+        reason = result.reason;
+        // Check if this policy requires approval
+        if ((result as any).requiresApproval) {
+          requiresApproval = true;
+        }
+        if ((result as any).flaggedForReview) {
+          flaggedForReview = true;
+        }
+        // Don't break if it requires approval - we want to check all policies
+        // But break for deny actions
+        if (!(result as any).requiresApproval && !(result as any).flaggedForReview) {
+          break;
+        }
+      } else if ((result as any).flaggedForReview) {
+        flaggedForReview = true;
+      }
+    }
+
+    // NO RECORDING - just return the check result
+    return { 
+      allowed, 
+      reason, 
+      requiresApproval: requiresApproval || undefined,
+      flaggedForReview: flaggedForReview || undefined,
+      matchedPolicies 
+    };
+  }
+
+  /**
+   * Full policy check WITH recording (for actual purchases)
+   * Use this only during actual checkout/purchase flow
+   */
+  async checkPurchase(request: PurchaseRequest): Promise<PolicyCheckResult> {
+    const policies = await this.db.getActivePolicies(request.userId);
+    const matchedPolicies: PolicyCheckResult['matchedPolicies'] = [];
+    let allowed = true;
+    let reason: string | undefined;
+    let requiresApproval = false;
+    let flaggedForReview = false;
+
+    // Determine transaction type (default to agent-to-merchant for backwards compatibility)
+    const transactionType = request.transactionType || 'agent-to-merchant';
+
+    // Filter policies by transaction type
+    console.log(`🔍 PolicyService: Checking ${policies.length} policies for transaction type: ${transactionType}`);
+    policies.forEach(p => console.log(`  - Policy: ${p.name}, transactionTypes:`, p.transactionTypes));
+    
+    const applicablePolicies = policies.filter(policy => {
+      // If policy has no transactionTypes set, apply to all (backwards compatibility)
+      if (!policy.transactionTypes || policy.transactionTypes.length === 0) {
+        console.log(`  ✓ Policy ${policy.name}: No transactionTypes, applying to all`);
+        return true;
+      }
+      // Check if policy applies to this transaction type
+      const applies = policy.transactionTypes.includes(transactionType) || 
+             policy.transactionTypes.includes('all');
+      console.log(`  ${applies ? '✓' : '✗'} Policy ${policy.name}: ${applies ? 'APPLIES' : 'does not apply'}`);
+      return applies;
+    });
+
+    console.log(`🔍 PolicyService: Found ${applicablePolicies.length} applicable policies`);
+
+    // If no applicable policies, deny by default for safety
+    if (applicablePolicies.length === 0) {
+      console.log(`❌ PolicyService: No applicable policies found for ${transactionType}`);
+      return {
+        allowed: false,
+        reason: `No policies configured for ${transactionType} transactions`,
+        matchedPolicies: [],
+      };
+    }
+
+    for (const policy of applicablePolicies) {
+      const result = await this.checkPolicy(policy, request, transactionType);
       matchedPolicies.push({
         id: policy.id,
         name: policy.name,
@@ -57,6 +204,7 @@ export class PolicyService {
       amount: request.price,
       merchant: request.merchant,
       category: request.category,
+      transactionType: (request as any).transactionType || 'agent-to-merchant', // NEW: Include transaction type
       allowed,
       requiresApproval: requiresApproval || false,
       policyCheckResults: matchedPolicies,
@@ -71,29 +219,248 @@ export class PolicyService {
     };
   }
 
-  private async checkPolicy(policy: Policy, request: PurchaseRequest) {
+  /**
+   * Simulate a single policy against a transaction in-memory.
+   * Does NOT read from or write to the database.
+   * currentSpending defaults to 0 for budget policies.
+   */
+  async simulatePolicy(
+    policy: Policy,
+    request: PurchaseRequest,
+    currentSpending: number = 0,
+  ): Promise<PolicyCheckResult> {
+    const transactionType = request.transactionType || 'agent-to-merchant';
+
+    // Check if this policy applies to the given transaction type
+    if (policy.transactionTypes && policy.transactionTypes.length > 0) {
+      const applies =
+        policy.transactionTypes.includes(transactionType) ||
+        policy.transactionTypes.includes('all');
+      if (!applies) {
+        return {
+          allowed: true,
+          reason: `Policy does not apply to ${transactionType} transactions`,
+          matchedPolicies: [
+            {
+              id: policy.id,
+              name: policy.name,
+              passed: true,
+              reason: 'Transaction type not in scope',
+            },
+          ],
+        };
+      }
+    }
+
+    const result = await this.checkPolicy(policy, request, transactionType, currentSpending);
+    return {
+      allowed: result.passed,
+      reason: result.reason,
+      requiresApproval: (result as any).requiresApproval || undefined,
+      flaggedForReview: (result as any).flaggedForReview || undefined,
+      matchedPolicies: [
+        {
+          id: policy.id,
+          name: policy.name,
+          passed: result.passed,
+          reason: result.reason,
+        },
+      ],
+    };
+  }
+
+  private async checkPolicy(policy: Policy, request: PurchaseRequest, transactionType: string, spendingOverride?: number) {
     let hasMatchingCondition = false;
+    
+    // Check policy conditions - serviceType (for agent-to-agent)
+    if (policy.conditions?.serviceType && policy.conditions.serviceType.length > 0 && request.serviceType) {
+      const serviceTypeLower = request.serviceType.toLowerCase();
+      const matchesServiceType = policy.conditions.serviceType.some(
+        (st: string) => st.toLowerCase() === serviceTypeLower
+      );
+      
+      if (!matchesServiceType) {
+        // Policy doesn't apply to this service type
+        return {
+          passed: true,
+          reason: undefined,
+        };
+      }
+      hasMatchingCondition = true;
+    }
+    
+    // Agent-to-agent specific validations
+    if (transactionType === 'agent-to-agent') {
+      // Check recipient agent restrictions
+      if (request.recipientAgentId) {
+        const recipientLower = request.recipientAgentId.toLowerCase();
+        
+        if (policy.rules.blockedRecipientAgents && policy.rules.blockedRecipientAgents.length > 0) {
+          hasMatchingCondition = true;
+          const isBlocked = policy.rules.blockedRecipientAgents.some(
+            (blocked) => blocked.toLowerCase() === recipientLower
+          );
+          if (isBlocked) {
+            return {
+              passed: false,
+              reason: `Recipient agent "${request.recipientAgentId}" is blocked`,
+            };
+          }
+        }
+        
+        if (policy.rules.allowedRecipientAgents && policy.rules.allowedRecipientAgents.length > 0) {
+          hasMatchingCondition = true;
+          const isAllowed = policy.rules.allowedRecipientAgents.some(
+            (allowed) => allowed.toLowerCase() === recipientLower
+          );
+          if (!isAllowed) {
+            return {
+              passed: false,
+              reason: `Recipient agent "${request.recipientAgentId}" is not in the allowed list`,
+            };
+          }
+        }
+      }
+      
+      // Check buyer agent restrictions
+      if (request.buyerAgentId) {
+        const buyerLower = request.buyerAgentId.toLowerCase();
+        
+        if (policy.rules.allowedAgentNames && policy.rules.allowedAgentNames.length > 0) {
+          hasMatchingCondition = true;
+          const isAllowed = policy.rules.allowedAgentNames.some(
+            (allowed) => allowed.toLowerCase() === buyerLower
+          );
+          if (!isAllowed) {
+            return {
+              passed: false,
+              reason: `Buyer agent "${request.buyerAgentId}" is not in the allowed list`,
+            };
+          }
+        }
+        
+        if (policy.rules.blockedAgentNames && policy.rules.blockedAgentNames.length > 0) {
+          hasMatchingCondition = true;
+          const isBlocked = policy.rules.blockedAgentNames.some(
+            (blocked) => blocked.toLowerCase() === buyerLower
+          );
+          if (isBlocked) {
+            return {
+              passed: false,
+              reason: `Buyer agent "${request.buyerAgentId}" is blocked`,
+            };
+          }
+        }
+      }
+      
+      // Check service type (category for agent-to-agent)
+      if (request.serviceType) {
+        hasMatchingCondition = true;
+        const serviceTypeLower = request.serviceType.toLowerCase();
+        
+        if (policy.rules.blockedCategories && policy.rules.blockedCategories.length > 0) {
+          const isBlocked = policy.rules.blockedCategories.some(
+            (blocked) => blocked.toLowerCase() === serviceTypeLower
+          );
+          if (isBlocked) {
+            return {
+              passed: false,
+              reason: `Service type "${request.serviceType}" is blocked`,
+            };
+          }
+        }
+        
+        if (policy.rules.allowedCategories && policy.rules.allowedCategories.length > 0) {
+          const isAllowed = policy.rules.allowedCategories.some(
+            (allowed) => allowed.toLowerCase() === serviceTypeLower
+          );
+          if (!isAllowed) {
+            return {
+              passed: false,
+              reason: `Service type "${request.serviceType}" is not in the allowed list`,
+            };
+          }
+        }
+      }
+    }
     
     // Budget check
     if (policy.type === 'budget') {
       hasMatchingCondition = true;
-      const spent = await this.db.getUserSpending(request.userId, policy.rules.period!);
-      if (spent + request.price > (policy.rules.maxAmount || 0)) {
-        return {
-          passed: false,
-          reason: `Would exceed ${policy.rules.period} budget of $${policy.rules.maxAmount}`,
-        };
+      
+      // Check if maxAmount is defined
+      if (policy.rules.maxAmount === undefined) {
+        // No budget limit specified, apply fallbackAction
+        const fallbackAction = policy.rules.fallbackAction;
+        if (fallbackAction === 'require_approval') {
+          return {
+            passed: false,
+            reason: policy.name,
+            requiresApproval: true,
+          };
+        } else if (fallbackAction === 'deny') {
+          return {
+            passed: false,
+            reason: policy.name,
+          };
+        }
+      } else {
+        // Budget limit is specified, check it
+        // Skip budget aggregation for 'transaction' period (per-transaction limits handled elsewhere)
+        if (policy.rules.period !== 'transaction') {
+          // Use spendingOverride for simulation; otherwise query the DB
+          const spent = spendingOverride !== undefined
+            ? spendingOverride
+            : await this.db.getUserSpending(request.userId, policy.rules.period!, transactionType as 'agent-to-merchant' | 'agent-to-agent');
+          console.log(`💰 Budget check: spent $${spent} of $${policy.rules.maxAmount} (${policy.rules.period}, ${transactionType})`);
+          if (spent + request.price > policy.rules.maxAmount) {
+            return {
+              passed: false,
+              reason: `Would exceed ${policy.rules.period} budget of $${policy.rules.maxAmount} (spent: $${spent})`,
+            };
+          }
+        } else {
+          // Per-transaction limit
+          if (request.price > policy.rules.maxAmount) {
+            return {
+              passed: false,
+              reason: `Exceeds per-transaction limit of $${policy.rules.maxAmount}`,
+            };
+          }
+        }
       }
     }
 
     // Transaction amount check
     if (policy.type === 'transaction') {
       hasMatchingCondition = true;
-      if (request.price > (policy.rules.maxTransactionAmount || Infinity)) {
-        return {
-          passed: false,
-          reason: `Exceeds transaction limit of $${policy.rules.maxTransactionAmount}`,
-        };
+      
+      // If maxTransactionAmount is specified, check it
+      if (policy.rules.maxTransactionAmount !== undefined) {
+        if (request.price > policy.rules.maxTransactionAmount) {
+          return {
+            passed: false,
+            reason: `Exceeds transaction limit of $${policy.rules.maxTransactionAmount}`,
+          };
+        }
+      } else {
+        // No amount limit specified, but conditions matched
+        // Apply fallbackAction (e.g., require approval for all API services)
+        const fallbackAction = policy.rules.fallbackAction;
+        
+        if (fallbackAction === 'require_approval') {
+          return {
+            passed: false,
+            reason: policy.name,
+            requiresApproval: true,
+          };
+        } else if (fallbackAction === 'deny') {
+          return {
+            passed: false,
+            reason: policy.name,
+          };
+        }
+        // If fallbackAction is 'approve' or undefined, let it pass
       }
     }
 
@@ -349,12 +716,35 @@ export class PolicyService {
     // Composite conditions (for complex rules with multiple field checks)
     if (policy.type === 'composite' && policy.rules.compositeConditions) {
       hasMatchingCondition = true;
+      
+      // Check if ALL conditions match
+      let allConditionsMatch = true;
       for (const condition of policy.rules.compositeConditions) {
         const result = this.checkCompositeCondition(condition, request);
         if (!result.passed) {
-          return result;
+          allConditionsMatch = false;
+          break;
         }
       }
+      
+      // If all conditions match, apply the fallbackAction
+      if (allConditionsMatch) {
+        const fallbackAction = policy.rules.fallbackAction;
+        
+        if (fallbackAction === 'deny') {
+          return {
+            passed: false,
+            reason: policy.name,
+          };
+        } else if (fallbackAction === 'require_approval') {
+          return {
+            passed: false,
+            reason: policy.name,
+            requiresApproval: true,
+          };
+        }
+      }
+      // If conditions don't all match, policy doesn't apply (pass)
     }
 
     // If no conditions matched, apply fallback action

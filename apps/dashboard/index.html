@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agentic Commerce — Dashboard</title>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --surface-alt: #1a1a27;
+      --border: #2a2a3a;
+      --text: #e4e4ef;
+      --text-muted: #8888a0;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #eab308;
+      --radius: 10px;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    .layout { display: flex; min-height: 100vh; }
+    .sidebar { width: 240px; background: var(--surface); border-right: 1px solid var(--border); padding: 24px 0; flex-shrink: 0; display: flex; flex-direction: column; }
+    .sidebar h1 { font-size: 16px; font-weight: 700; padding: 0 20px 24px; letter-spacing: -0.3px; color: var(--accent); }
+    .nav-section { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); padding: 16px 20px 6px; opacity: 0.6; }
+    .nav-item { display: block; padding: 10px 20px; font-size: 14px; color: var(--text-muted); cursor: pointer; border-left: 3px solid transparent; transition: all 0.15s; text-decoration: none; }
+    .nav-item:hover, .nav-item.active { background: var(--surface-alt); color: var(--text); border-left-color: var(--accent); }
+    .sidebar-footer { margin-top: auto; padding: 16px 20px; border-top: 1px solid var(--border); }
+    .sidebar-footer .org-name { font-size: 13px; font-weight: 600; color: var(--text); }
+    .sidebar-footer .org-id { font-size: 11px; color: var(--text-muted); font-family: 'SF Mono', monospace; margin-top: 2px; }
+    .main { flex: 1; padding: 32px; overflow-y: auto; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; }
+    .header h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.3px; }
+    .header-sub { font-size: 13px; color: var(--text-muted); }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 28px; }
+    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+    .stat-card .label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 8px; }
+    .stat-card .value { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
+    .stat-card .value.green { color: var(--green); }
+    .stat-card .value.red { color: var(--red); }
+    .stat-card .value.yellow { color: var(--yellow); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 20px; }
+    .card h3 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .detail-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .detail-row .dl { font-size: 13px; color: var(--text-muted); }
+    .detail-row .dv { font-size: 13px; font-weight: 500; }
+    .detail-row .dv.mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+    td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    tr:hover td { background: var(--surface-alt); }
+    .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .badge.completed { background: rgba(34,197,94,0.15); color: var(--green); }
+    .badge.active { background: rgba(34,197,94,0.15); color: var(--green); }
+    .badge.failed { background: rgba(239,68,68,0.15); color: var(--red); }
+    .badge.rejected { background: rgba(234,179,8,0.15); color: var(--yellow); }
+    .badge.pending { background: rgba(99,102,241,0.15); color: var(--accent); }
+    .input-row { display: flex; gap: 12px; margin-bottom: 16px; }
+    input, select { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; color: var(--text); font-size: 13px; flex: 1; }
+    input:focus, select:focus { outline: none; border-color: var(--accent); }
+    button { background: var(--accent); color: white; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; flex-shrink: 0; }
+    button:hover { background: var(--accent-hover); }
+    button.secondary { background: var(--surface-alt); border: 1px solid var(--border); color: var(--text); }
+    button.secondary:hover { background: var(--border); }
+    button.danger { background: var(--red); }
+    button.danger:hover { opacity: 0.85; }
+    .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
+    #loading { text-align: center; padding: 40px; color: var(--text-muted); }
+    .empty { text-align: center; padding: 40px; color: var(--text-muted); font-size: 14px; }
+    .alert { padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; }
+    .alert.info { background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.3); color: var(--accent); }
+    .alert.success { background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.3); color: var(--green); }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav class="sidebar">
+      <h1>Agentic Commerce</h1>
+      <a class="nav-item active" data-view="overview">Overview</a>
+      <div class="nav-section">Transactions</div>
+      <a class="nav-item" data-view="payments">Payments</a>
+      <a class="nav-item" data-view="treasury">Treasury</a>
+      <a class="nav-item" data-view="audit">Audit Log</a>
+      <div class="nav-section">Configuration</div>
+      <a class="nav-item" data-view="policies">Policies</a>
+      <a class="nav-item" data-view="providers">Providers</a>
+      <div class="nav-section">Account</div>
+      <a class="nav-item" data-view="account">Organization</a>
+      <a class="nav-item" data-view="apikeys">API Keys</a>
+      <a class="nav-item" data-view="webhooks">Webhooks</a>
+      <a class="nav-item" data-view="settings">Settings</a>
+      <div class="sidebar-footer" id="sidebar-org">
+        <div class="org-name">Loading...</div>
+        <div class="org-id"></div>
+      </div>
+    </nav>
+    <div class="main" id="content">
+      <div id="loading">Connecting to API...</div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = localStorage.getItem('api_base') || 'http://localhost:3001/api/v1';
+    const API_KEY = localStorage.getItem('api_key') || 'ak_demo_live_test_key_2024';
+
+    let cachedOrg = null;
+
+    async function api(path, opts = {}) {
+      const resp = await fetch(`${API_BASE}${path}`, {
+        ...opts,
+        headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json', ...opts.headers },
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+      return resp.json();
+    }
+
+    function badge(status) {
+      const s = String(status || 'pending').toLowerCase();
+      const cls = ['completed','active','failed','rejected','pending'].includes(s) ? s : 'pending';
+      return `<span class="badge ${cls}">${status}</span>`;
+    }
+
+    function fmtDate(d) { return d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-'; }
+    function fmtDateTime(d) { return d ? new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'; }
+    function n(v) { return Number(v || 0); }
+
+    async function loadOrg() {
+      try {
+        cachedOrg = await api('/orgs/me');
+        const el = document.getElementById('sidebar-org');
+        el.querySelector('.org-name').textContent = cachedOrg.name || 'Unknown Org';
+        el.querySelector('.org-id').textContent = cachedOrg.id || '';
+      } catch (e) {}
+    }
+
+    const views = {
+      async overview() {
+        const [usage, treasury] = await Promise.all([
+          api('/usage?period=30d'),
+          api('/treasury'),
+        ]);
+        const org = cachedOrg || {};
+        const s = usage.summary || {};
+        return `
+          <div class="header">
+            <h2>Overview</h2>
+            <span class="header-sub">${org.name || ''} &middot; ${org.slug || ''}</span>
+          </div>
+          <div class="stats">
+            <div class="stat-card"><div class="label">Total Payments (30d)</div><div class="value">${n(s.total_payments)}</div></div>
+            <div class="stat-card"><div class="label">Completed</div><div class="value green">${n(s.completed)}</div></div>
+            <div class="stat-card"><div class="label">Failed</div><div class="value red">${n(s.failed)}</div></div>
+            <div class="stat-card"><div class="label">Rejected</div><div class="value yellow">${n(s.rejected)}</div></div>
+            <div class="stat-card"><div class="label">USDC Spent</div><div class="value">$${n(s.total_usdc).toFixed(2)}</div></div>
+            <div class="stat-card"><div class="label">Treasury Available</div><div class="value green">$${n(treasury.balanceAvailable).toFixed(2)}</div></div>
+          </div>
+          <div class="card"><h3>Daily Volume</h3>
+            ${(usage.daily || []).length === 0 ? '<div class="empty">No transaction data yet. Execute a payment to see volume here.</div>' :
+              '<table><tr><th>Date</th><th>Transactions</th><th>USDC</th></tr>' +
+              (usage.daily || []).reverse().map(d => `<tr><td>${fmtDate(d.date)}</td><td>${d.count}</td><td>$${n(d.usdc).toFixed(4)}</td></tr>`).join('') +
+              '</table>'}
+          </div>
+          <div class="card"><h3>Spend by Provider</h3>
+            ${(usage.byProvider || []).length === 0 ? '<div class="empty">No data</div>' :
+              '<table><tr><th>Provider</th><th>Transactions</th><th>USDC</th></tr>' +
+              (usage.byProvider || []).map(p => `<tr><td>${p.provider}</td><td>${p.count}</td><td>$${n(p.usdc).toFixed(4)}</td></tr>`).join('') +
+              '</table>'}
+          </div>`;
+      },
+
+      async account() {
+        const [org, treasury, whSecret] = await Promise.all([
+          api('/orgs/me'),
+          api('/treasury'),
+          api('/orgs/me/webhook-secret'),
+        ]);
+        return `
+          <div class="header"><h2>Organization</h2></div>
+          <div class="detail-grid">
+            <div class="card">
+              <h3>Details</h3>
+              <div class="detail-row"><span class="dl">Organization Name</span><span class="dv">${org.name}</span></div>
+              <div class="detail-row"><span class="dl">Slug</span><span class="dv mono">${org.slug}</span></div>
+              <div class="detail-row"><span class="dl">Org ID</span><span class="dv mono">${org.id}</span></div>
+              <div class="detail-row"><span class="dl">Status</span><span class="dv">${badge(org.status)}</span></div>
+              <div class="detail-row"><span class="dl">Created</span><span class="dv">${fmtDate(org.created_at)}</span></div>
+              <div class="detail-row"><span class="dl">Updated</span><span class="dv">${fmtDate(org.updated_at)}</span></div>
+            </div>
+            <div class="card">
+              <h3>Treasury</h3>
+              <div class="detail-row"><span class="dl">Currency</span><span class="dv">${treasury.currency || 'USDC'}</span></div>
+              <div class="detail-row"><span class="dl">Available Balance</span><span class="dv" style="color:var(--green);font-size:18px;font-weight:700">$${n(treasury.balanceAvailable).toFixed(2)}</span></div>
+              <div class="detail-row"><span class="dl">Reserved (in-flight)</span><span class="dv" style="color:var(--yellow)">$${n(treasury.balanceReserved).toFixed(2)}</span></div>
+              <div class="detail-row"><span class="dl">Treasury ID</span><span class="dv mono">${treasury.id || '-'}</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Webhook Configuration</h3>
+            <div class="detail-row"><span class="dl">Webhook Secret</span><span class="dv mono">${whSecret.webhook_secret ? whSecret.webhook_secret.slice(0, 12) + '...' : '<em style="color:var(--text-muted)">Not configured</em>'}</span></div>
+            <div style="margin-top:12px">
+              <button class="secondary" onclick="rotateWebhookSecret()">Rotate Secret</button>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Update Organization Name</h3>
+            <div class="input-row">
+              <input id="org-name-input" value="${org.name}" placeholder="Organization name">
+              <button onclick="updateOrgName()">Update</button>
+            </div>
+          </div>`;
+      },
+
+      async payments() {
+        const data = await api('/payments?limit=50');
+        const payments = data.payments || [];
+        return `
+          <div class="header"><h2>Payments</h2><span class="header-sub">${payments.length} results</span></div>
+          ${payments.length === 0 ? '<div class="card"><div class="empty">No payments yet. Use the SDK or API to execute your first payment.</div></div>' : `
+          <div class="card">
+            <table>
+              <tr><th>Payment ID</th><th>Provider</th><th>Action</th><th>Status</th><th>USDC</th><th>TX Hash</th><th>Created</th></tr>
+              ${payments.map(p => `<tr>
+                <td class="mono">${(p.id || '').slice(0,24)}...</td>
+                <td>${p.provider_id || p.provider || '-'}</td>
+                <td>${p.action || '-'}</td>
+                <td>${badge(p.status)}</td>
+                <td>${p.payment_amount_usdc != null ? '$' + n(p.payment_amount_usdc).toFixed(4) : '-'}</td>
+                <td class="mono">${p.base_tx_hash ? p.base_tx_hash.slice(0,14) + '...' : '-'}</td>
+                <td>${fmtDateTime(p.created_at)}</td>
+              </tr>`).join('')}
+            </table>
+          </div>`}`;
+      },
+
+      async policies() {
+        const [data, templates] = await Promise.all([api('/policies'), api('/policy-templates')]);
+        return `
+          <div class="header"><h2>Policies</h2><span class="header-sub">Source: ${data.source || 'org'}</span></div>
+          <div class="card"><h3>Active Policies</h3>
+            ${(data.policies || []).length === 0 ? '<div class="empty">No policies configured</div>' : `
+            <table><tr><th>Name</th><th>Type</th><th>Priority</th><th>Enabled</th></tr>
+            ${(data.policies || []).map(p => `<tr>
+              <td>${p.name}</td><td><span class="badge pending">${p.type}</span></td><td>${p.priority}</td>
+              <td>${p.enabled ? badge('active') : badge('failed')}</td>
+            </tr>`).join('')}
+            </table>`}
+          </div>
+          <div class="card"><h3>Policy Templates (${templates.total || 0} available)</h3>
+            <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">Apply a template to quickly create a new policy.</p>
+            <table><tr><th>Name</th><th>Category</th><th>Type</th><th>Action</th></tr>
+            ${(templates.templates || []).map(t => `<tr>
+              <td>${t.name}<div style="font-size:11px;color:var(--text-muted)">${t.description}</div></td>
+              <td><span class="badge pending">${t.category}</span></td>
+              <td>${t.type}</td>
+              <td><button class="secondary" onclick="applyTemplate('${t.id}','${t.name.replace(/'/g, "\\'")}')">Apply</button></td>
+            </tr>`).join('')}
+            </table>
+          </div>`;
+      },
+
+      async treasury() {
+        const [bal, ledger] = await Promise.all([api('/treasury'), api('/treasury/ledger?limit=30')]);
+        return `
+          <div class="header"><h2>Treasury</h2></div>
+          <div class="stats">
+            <div class="stat-card"><div class="label">Available</div><div class="value green">$${n(bal.balanceAvailable).toFixed(2)}</div></div>
+            <div class="stat-card"><div class="label">Reserved</div><div class="value yellow">$${n(bal.balanceReserved).toFixed(2)}</div></div>
+            <div class="stat-card"><div class="label">Total</div><div class="value">$${(n(bal.balanceAvailable) + n(bal.balanceReserved)).toFixed(2)}</div></div>
+          </div>
+          <div class="card"><h3>Ledger</h3>
+            ${(ledger.entries || []).length === 0 ? '<div class="empty">No ledger entries</div>' : `
+            <table><tr><th>Type</th><th>Amount</th><th>Reference</th><th>Date</th></tr>
+            ${(ledger.entries || []).map(e => `<tr>
+              <td>${badge(e.entry_type || e.type)}</td>
+              <td>$${n(e.amount).toFixed(4)}</td>
+              <td class="mono">${(e.reference_id || e.reference || '-').slice(0,24)}</td>
+              <td>${fmtDateTime(e.created_at)}</td>
+            </tr>`).join('')}
+            </table>`}
+          </div>`;
+      },
+
+      async audit() {
+        const data = await api('/audit?limit=40');
+        const entries = data.entries || [];
+        return `
+          <div class="header"><h2>Audit Log</h2><span class="header-sub">${entries.length} entries</span></div>
+          <div class="card">
+            ${entries.length === 0 ? '<div class="empty">No audit entries</div>' : `
+            <table><tr><th>Event Type</th><th>Resource</th><th>Action</th><th>Outcome</th><th>Correlation</th><th>Time</th></tr>
+            ${entries.map(e => `<tr>
+              <td>${e.event_type || e.eventType || '-'}</td>
+              <td>${e.resource || '-'}</td>
+              <td>${e.action || '-'}</td>
+              <td>${badge(e.outcome || 'unknown')}</td>
+              <td class="mono">${(e.correlation_id || e.correlationId || '').slice(0,16) || '-'}</td>
+              <td>${fmtDateTime(e.timestamp || e.created_at)}</td>
+            </tr>`).join('')}
+            </table>`}
+          </div>`;
+      },
+
+      async apikeys() {
+        const data = await api('/orgs/me/api-keys');
+        const keys = data.keys || [];
+        return `
+          <div class="header"><h2>API Keys</h2></div>
+          <div class="card" id="new-key-result" style="display:none">
+            <div class="alert success">New API key created. Copy it now &mdash; it will not be shown again.</div>
+            <div class="mono" id="new-key-value" style="padding:12px;background:var(--surface-alt);border-radius:6px;word-break:break-all;user-select:all"></div>
+          </div>
+          <div class="card">
+            <h3>Create New Key</h3>
+            <div class="input-row">
+              <input id="new-key-name" placeholder="Key name (e.g. Production)">
+              <select id="new-key-mode"><option value="live">Live (ak_live_)</option><option value="test">Sandbox (ak_test_)</option></select>
+              <button onclick="createApiKey()">Create Key</button>
+            </div>
+          </div>
+          <div class="card"><h3>Active Keys (${keys.length})</h3>
+            ${keys.length === 0 ? '<div class="empty">No API keys</div>' : `
+            <table><tr><th>Name</th><th>Prefix</th><th>Scopes</th><th>Enabled</th><th>Last Used</th><th>Created</th></tr>
+            ${keys.map(k => `<tr>
+              <td>${k.name}</td>
+              <td class="mono">${k.key_prefix || k.prefix || ''}...</td>
+              <td style="max-width:200px">${(Array.isArray(k.scopes) ? k.scopes : JSON.parse(k.scopes || '[]')).join(', ')}</td>
+              <td>${k.enabled ? badge('active') : badge('failed')}</td>
+              <td>${fmtDateTime(k.last_used_at)}</td>
+              <td>${fmtDate(k.created_at)}</td>
+            </tr>`).join('')}
+            </table>`}
+          </div>`;
+      },
+
+      async webhooks() {
+        const [events, deliveries, secret] = await Promise.all([
+          api('/webhooks/events'),
+          api('/webhooks/deliveries?limit=20'),
+          api('/orgs/me/webhook-secret'),
+        ]);
+        return `
+          <div class="header"><h2>Webhooks</h2></div>
+          <div class="card">
+            <h3>Webhook Secret</h3>
+            <div class="detail-row">
+              <span class="dl">Current Secret</span>
+              <span class="dv mono">${secret.webhook_secret ? secret.webhook_secret.slice(0,20) + '...' : 'Not set'}</span>
+            </div>
+            <div style="margin-top:12px"><button class="secondary" onclick="rotateWebhookSecret()">Rotate Secret</button></div>
+          </div>
+          <div class="card">
+            <h3>Supported Events (${(events.events || []).length})</h3>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+              ${(events.events || []).map(e => `<span class="badge pending">${e}</span>`).join('')}
+            </div>
+          </div>
+          <div class="card"><h3>Recent Deliveries</h3>
+            ${(deliveries.deliveries || []).length === 0 ? '<div class="empty">No webhook deliveries yet. Deliveries appear after payments with a callback_url.</div>' : `
+            <table><tr><th>Event</th><th>Timestamp</th></tr>
+            ${(deliveries.deliveries || []).map(d => `<tr><td>${d.event_type}</td><td>${fmtDateTime(d.timestamp)}</td></tr>`).join('')}
+            </table>`}
+          </div>`;
+      },
+
+      async providers() {
+        const data = await api('/providers');
+        const providers = data.providers || [];
+        return `
+          <div class="header"><h2>Providers</h2><span class="header-sub">${providers.length} registered</span></div>
+          <div class="card">
+            <table><tr><th>ID</th><th>Name</th><th>Type</th><th>Endpoint</th><th>Status</th></tr>
+            ${providers.map(p => `<tr>
+              <td class="mono">${p.id}</td>
+              <td>${p.name}</td>
+              <td><span class="badge pending">${p.type}</span></td>
+              <td class="mono" style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${p.endpoint || '-'}</td>
+              <td>${p.enabled ? badge('active') : badge('failed')}</td>
+            </tr>`).join('')}
+            </table>
+          </div>`;
+      },
+
+      settings() {
+        return `
+          <div class="header"><h2>Settings</h2></div>
+          <div class="card"><h3>API Connection</h3>
+            <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">Configure the API endpoint and authentication key this dashboard connects to.</p>
+            <div class="input-row">
+              <input id="set-base" value="${API_BASE}" placeholder="API Base URL">
+            </div>
+            <div class="input-row">
+              <input id="set-key" value="${API_KEY}" placeholder="API Key" type="password">
+              <button class="secondary" onclick="document.getElementById('set-key').type = document.getElementById('set-key').type === 'password' ? 'text' : 'password'">Show/Hide</button>
+            </div>
+            <div class="input-row">
+              <button onclick="localStorage.setItem('api_base', document.getElementById('set-base').value); localStorage.setItem('api_key', document.getElementById('set-key').value); location.reload();">Save & Reload</button>
+              <button class="secondary" onclick="localStorage.removeItem('api_base'); localStorage.removeItem('api_key'); location.reload();">Reset to Defaults</button>
+            </div>
+          </div>
+          <div class="card"><h3>About</h3>
+            <div class="detail-row"><span class="dl">Platform</span><span class="dv">Agentic Commerce</span></div>
+            <div class="detail-row"><span class="dl">API Version</span><span class="dv">v1</span></div>
+            <div class="detail-row"><span class="dl">Dashboard Version</span><span class="dv">1.0.0</span></div>
+          </div>`;
+      },
+    };
+
+    async function navigate(view) {
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === view));
+      const content = document.getElementById('content');
+      content.innerHTML = '<div id="loading">Loading...</div>';
+      try {
+        const html = await (views[view] ? views[view]() : Promise.resolve('<div class="empty">View not found</div>'));
+        content.innerHTML = html;
+      } catch (err) {
+        content.innerHTML = `<div class="card" style="border-color:var(--red)"><h3>Error</h3><p>${err.message}</p><p style="color:var(--text-muted);margin-top:8px">Check Settings to configure your API connection.</p></div>`;
+      }
+    }
+
+    async function updateOrgName() {
+      const name = document.getElementById('org-name-input').value;
+      if (!name) return;
+      await api('/orgs/me', { method: 'PUT', body: { name } });
+      await loadOrg();
+      navigate('account');
+    }
+
+    async function rotateWebhookSecret() {
+      if (!confirm('Rotate webhook secret? The old secret will stop working immediately.')) return;
+      const data = await api('/orgs/me/webhook-secret/rotate', { method: 'POST' });
+      alert('New webhook secret: ' + data.webhook_secret);
+      navigate(document.querySelector('.nav-item.active')?.dataset?.view || 'account');
+    }
+
+    async function createApiKey() {
+      const name = document.getElementById('new-key-name').value;
+      if (!name) { alert('Enter a key name'); return; }
+      const data = await api('/orgs/me/api-keys', { method: 'POST', body: { name, scopes: ['*'] } });
+      if (data.key) {
+        document.getElementById('new-key-result').style.display = 'block';
+        document.getElementById('new-key-value').textContent = data.key;
+      }
+    }
+
+    async function applyTemplate(id, name) {
+      if (!confirm(`Apply template "${name}" as a new policy?`)) return;
+      await api(`/policy-templates/${id}/apply`, { method: 'POST', body: {} });
+      navigate('policies');
+    }
+
+    document.querySelectorAll('.nav-item').forEach(item => {
+      item.addEventListener('click', (e) => { e.preventDefault(); navigate(item.dataset.view); });
+    });
+
+    loadOrg().then(() => navigate('overview'));
+  </script>
+</body>
+</html>
