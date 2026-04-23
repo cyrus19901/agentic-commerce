@@ -60,3 +60,6 @@ services:
         value: mainnet-beta
       - key: SOLANA_RPC_MAINNET
         sync: false
+      # Platform Solana payer wallet (base58 private key) for trust gate + x402 payments
+      - key: SOLANA_PAYER_SECRET_KEY
+        sync: false

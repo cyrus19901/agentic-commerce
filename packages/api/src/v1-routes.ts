@@ -1482,9 +1482,29 @@ async function evaluateProviderTrust(url: string, method: string, sampleBody: an
 
   const maxAtomic = Number(process.env.MARKETPLACE_TRUST_MAX_ATOMIC || '100000');
 
-  const { normalizeHexPrivateKey, CHAIN_REGISTRY, toCaip2 } = require('@agentic-commerce/shared');
-  const pk = normalizeHexPrivateKey(process.env.DEMO_BUYER_PRIVATE_KEY || process.env.FIRECRAWL_AGENT_PRIVATE_KEY);
-  if (!pk) return fail('wallet', 'missing_demo_buyer_key');
+  const { normalizeHexPrivateKey, CHAIN_REGISTRY, toCaip2, isSolanaNetwork, isEvmNetwork } = require('@agentic-commerce/shared');
+  const evmPk = normalizeHexPrivateKey(process.env.DEMO_BUYER_PRIVATE_KEY || process.env.FIRECRAWL_AGENT_PRIVATE_KEY);
+
+  // Parse platform Solana payer key (base58 or JSON array)
+  let solanaPayer: any = null;
+  const solanaPayerRaw = process.env.SOLANA_PAYER_SECRET_KEY;
+  if (solanaPayerRaw) {
+    try {
+      const { Keypair } = require('@solana/web3.js');
+      if (solanaPayerRaw.startsWith('[')) {
+        solanaPayer = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(solanaPayerRaw)));
+      } else {
+        // base58 encoded secret key
+        const bs58: any = require('bs58');
+        const decode = bs58.default?.decode ?? bs58.decode;
+        solanaPayer = Keypair.fromSecretKey(decode(solanaPayerRaw));
+      }
+    } catch {
+      // Solana payer not available — Solana accepts will be skipped
+    }
+  }
+
+  if (!evmPk && !solanaPayer) return fail('wallet', 'missing_payer_key');
 
   // Try each accepted payment method until one succeeds
   let lastAttempt: Record<string, unknown> = {};
@@ -1495,21 +1515,66 @@ async function evaluateProviderTrust(url: string, method: string, sampleBody: an
 
     const caip2 = toCaip2(accept.network || 'base');
     const chainCfg = CHAIN_REGISTRY[caip2];
-    // Only EVM chains supported for now (skip TRON etc.)
-    if (!chainCfg || !caip2.startsWith('eip155:')) {
+
+    const isSolana = isSolanaNetwork(caip2);
+    const isEvm = isEvmNetwork(caip2);
+
+    if (!chainCfg || (!isEvm && !isSolana)) {
       lastAttempt = { reason: `unsupported_network:${caip2}`, network: caip2 };
+      continue;
+    }
+    if (isEvm && !evmPk) {
+      lastAttempt = { reason: 'missing_evm_payer_key', network: caip2 };
+      continue;
+    }
+    if (isSolana && !solanaPayer) {
+      lastAttempt = { reason: 'missing_solana_payer_key', network: caip2 };
       continue;
     }
 
     const isCdpFacilitated = String(accept.extra?.facilitator || '').includes('cdp.coinbase.com');
-    lastAttempt = { network: caip2, priceAtomic, priceUsdc: priceAtomic / 1_000_000, isCdpFacilitated };
+    lastAttempt = { network: caip2, priceAtomic, priceUsdc: priceAtomic / 1_000_000, isCdpFacilitated, isSolana };
 
+    let paymentHeader = '';
+
+    if (isSolana) {
+      // ── Solana payment header ──────────────────────────────────────────────
+      // Build a signed SPL USDC transfer transaction as the payment header.
+      try {
+        const { Connection, PublicKey, Transaction } = require('@solana/web3.js');
+        const { getAssociatedTokenAddress, createTransferInstruction, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+
+        const rpcUrl = process.env.SOLANA_RPC_MAINNET || chainCfg.rpcUrl;
+        const conn = new Connection(rpcUrl, 'confirmed');
+
+        const payerPubkey = solanaPayer.publicKey;
+        const recipientPubkey = new PublicKey(String(accept.payTo || '').trim());
+        const mintPubkey = new PublicKey(chainCfg.usdcMint || chainCfg.usdcAddress);
+
+        const [fromAta, toAta] = await Promise.all([
+          getAssociatedTokenAddress(mintPubkey, payerPubkey),
+          getAssociatedTokenAddress(mintPubkey, recipientPubkey),
+        ]);
+
+        const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash();
+        const tx = new Transaction({ recentBlockhash: blockhash, feePayer: payerPubkey });
+        tx.add(createTransferInstruction(fromAta, toAta, payerPubkey, BigInt(priceAtomic), [], TOKEN_PROGRAM_ID));
+        tx.sign(solanaPayer);
+
+        paymentHeader = Buffer.from(tx.serialize()).toString('base64');
+        lastAttempt = { ...lastAttempt, solanaBlockhash: blockhash, lastValidBlockHeight };
+      } catch (err: any) {
+        lastAttempt = { ...lastAttempt, reason: `solana_payment_header_failed:${err.message}` };
+        continue;
+      }
+    } else {
+      // ── EVM payment header (x402/client) ──────────────────────────────────
     const viem: any = require('viem');
     const viemAccounts: any = require('viem/accounts');
     const viemChains: any = require('viem/chains');
     const chainMap: Record<number, any> = { 8453: viemChains.base, 84532: viemChains.baseSepolia, 137: viemChains.polygon, 42161: viemChains.arbitrum };
     const walletClient = viem.createWalletClient({
-      account: viemAccounts.privateKeyToAccount(pk),
+      account: viemAccounts.privateKeyToAccount(evmPk),
       chain: chainMap[chainCfg.chainId] || viemChains.base,
       transport: viem.http(chainCfg.rpcUrl),
     });
@@ -1533,13 +1598,13 @@ async function evaluateProviderTrust(url: string, method: string, sampleBody: an
       mimeType: accept.mimeType || 'application/json',
     };
 
-    let paymentHeader = '';
     try {
       const parsed = x402Types.PaymentRequirementsSchema.parse(normalizedReq);
       paymentHeader = await x402Client.createPaymentHeader(walletClient, Number(probe?.x402Version || 1), parsed);
     } catch (err: any) {
       lastAttempt = { ...lastAttempt, reason: `create_payment_header_failed:${err.message}` };
       continue;
+    }
     }
 
     const isPost = String(method || 'GET').toUpperCase() === 'POST';

@@ -8,8 +8,10 @@
  */
 
 export interface ChainConfig {
+  type?: 'evm' | 'solana';
   name: string;
   caip2: string;
+  /** EVM chain ID (0 for non-EVM chains) */
   chainId: number;
   usdcAddress: string;
   usdcName: string;
@@ -17,6 +19,8 @@ export interface ChainConfig {
   rpcUrl: string;
   explorerUrl: string;
   explorerTxPath: string;
+  /** Solana-only: USDC SPL token mint address */
+  usdcMint?: string;
 }
 
 export const CHAIN_REGISTRY: Record<string, ChainConfig> = {
@@ -64,6 +68,34 @@ export const CHAIN_REGISTRY: Record<string, ChainConfig> = {
     explorerUrl: 'https://arbiscan.io',
     explorerTxPath: '/tx/',
   },
+
+  // ── Solana ────────────────────────────────────────────────────────────────
+  'solana:mainnet-beta': {
+    type: 'solana',
+    name: 'Solana',
+    caip2: 'solana:mainnet-beta',
+    chainId: 0,
+    usdcAddress: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC SPL mint
+    usdcMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    usdcName: 'USD Coin',
+    usdcVersion: '1',
+    rpcUrl: 'https://api.mainnet-beta.solana.com',
+    explorerUrl: 'https://solscan.io',
+    explorerTxPath: '/tx/',
+  },
+  'solana:devnet': {
+    type: 'solana',
+    name: 'Solana Devnet',
+    caip2: 'solana:devnet',
+    chainId: 0,
+    usdcAddress: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU', // devnet USDC
+    usdcMint: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
+    usdcName: 'USD Coin (devnet)',
+    usdcVersion: '1',
+    rpcUrl: 'https://api.devnet.solana.com',
+    explorerUrl: 'https://solscan.io',
+    explorerTxPath: '/tx/?cluster=devnet',
+  },
 };
 
 const SHORTNAME_MAP: Record<string, string> = {
@@ -73,7 +105,20 @@ const SHORTNAME_MAP: Record<string, string> = {
   'polygon': 'eip155:137',
   'arbitrum': 'eip155:42161',
   'ethereum': 'eip155:1',
+  'solana': 'solana:mainnet-beta',
+  'solana-mainnet': 'solana:mainnet-beta',
+  'solana-devnet': 'solana:devnet',
 };
+
+/** Returns true if the network is Solana-based */
+export function isSolanaNetwork(network: string): boolean {
+  return toCaip2(network).startsWith('solana:');
+}
+
+/** Returns true if the network is EVM-based */
+export function isEvmNetwork(network: string): boolean {
+  return toCaip2(network).startsWith('eip155:');
+}
 
 const CAIP2_TO_CDP: Record<string, string> = {
   'eip155:8453': 'base',
