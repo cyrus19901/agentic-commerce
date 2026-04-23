@@ -1469,123 +1469,176 @@ async function evaluateProviderTrust(url: string, method: string, sampleBody: an
   });
 
   if (!probe?.x402Compatible) return fail('probe', 'not_x402_compatible');
-  const accept = probe?.rawAccepts?.[0];
-  if (!accept) return fail('probe', 'missing_accepts');
+  const allAccepts: any[] = probe?.rawAccepts || [];
+  if (!allAccepts.length) return fail('probe', 'missing_accepts');
+
+  // Prefer non-CDP accepts first (direct on-chain, easier to test without CDP account)
+  // then fall back to CDP-facilitated
+  const sortedAccepts = [...allAccepts].sort((a, b) => {
+    const aCdp = String(a.extra?.facilitator || '').includes('cdp.coinbase.com') ? 1 : 0;
+    const bCdp = String(b.extra?.facilitator || '').includes('cdp.coinbase.com') ? 1 : 0;
+    return aCdp - bCdp;
+  });
 
   const maxAtomic = Number(process.env.MARKETPLACE_TRUST_MAX_ATOMIC || '100000');
-  const priceAtomic = Number(accept.maxAmountRequired || accept.amount || 0);
-  if (!Number.isFinite(priceAtomic) || priceAtomic <= 0) {
-    return fail('price', 'invalid_price_atomic');
-  }
-  if (priceAtomic > maxAtomic) {
-    return fail('price', `price_cap_exceeded:${priceAtomic}>${maxAtomic}`, { priceAtomic, maxAtomic });
-  }
 
   const { normalizeHexPrivateKey, CHAIN_REGISTRY, toCaip2 } = require('@agentic-commerce/shared');
   const pk = normalizeHexPrivateKey(process.env.DEMO_BUYER_PRIVATE_KEY || process.env.FIRECRAWL_AGENT_PRIVATE_KEY);
   if (!pk) return fail('wallet', 'missing_demo_buyer_key');
 
-  const caip2 = toCaip2(accept.network || 'base');
-  const chainCfg = CHAIN_REGISTRY[caip2];
-  if (!chainCfg) return fail('network', `unsupported_network:${accept.network || caip2}`);
+  // Try each accepted payment method until one succeeds
+  let lastAttempt: Record<string, unknown> = {};
+  for (const accept of sortedAccepts) {
+    const priceAtomic = Number(accept.maxAmountRequired || accept.amount || 0);
+    if (!Number.isFinite(priceAtomic) || priceAtomic <= 0) continue;
+    if (priceAtomic > maxAtomic) continue;
 
-  const viem: any = require('viem');
-  const viemAccounts: any = require('viem/accounts');
-  const viemChains: any = require('viem/chains');
-  const chainMap: Record<number, any> = { 8453: viemChains.base, 84532: viemChains.baseSepolia, 137: viemChains.polygon, 42161: viemChains.arbitrum };
-  const walletClient = viem.createWalletClient({
-    account: viemAccounts.privateKeyToAccount(pk),
-    chain: chainMap[chainCfg.chainId] || viemChains.base,
-    transport: viem.http(chainCfg.rpcUrl),
-  });
+    const caip2 = toCaip2(accept.network || 'base');
+    const chainCfg = CHAIN_REGISTRY[caip2];
+    // Only EVM chains supported for now (skip TRON etc.)
+    if (!chainCfg || !caip2.startsWith('eip155:')) {
+      lastAttempt = { reason: `unsupported_network:${caip2}`, network: caip2 };
+      continue;
+    }
 
-  const x402Client: { createPaymentHeader: (w: any, v: number, r: any) => Promise<string> } = require('x402/client');
-  const x402Types: { PaymentRequirementsSchema: { parse: (x: unknown) => any } } = require('x402/types');
-  const networkToX402: Record<string, string> = {
-    'eip155:8453': 'base',
-    'eip155:84532': 'base-sepolia',
-    'eip155:137': 'polygon',
-    'eip155:42161': 'arbitrum',
-  };
-  const normalizedReq = {
-    ...accept,
-    scheme: 'exact',
-    network: networkToX402[caip2] || accept.network || 'base',
-    payTo: String(accept.payTo || '').trim(),
-    maxAmountRequired: String(accept.maxAmountRequired || accept.amount || ''),
-    resource: typeof accept.resource === 'string' ? accept.resource : url,
-    description: accept.description || 'x402-protected resource',
-    mimeType: accept.mimeType || 'application/json',
-  };
+    const isCdpFacilitated = String(accept.extra?.facilitator || '').includes('cdp.coinbase.com');
+    lastAttempt = { network: caip2, priceAtomic, priceUsdc: priceAtomic / 1_000_000, isCdpFacilitated };
 
-  let paymentHeader = '';
-  try {
-    const parsed = x402Types.PaymentRequirementsSchema.parse(normalizedReq);
-    paymentHeader = await x402Client.createPaymentHeader(walletClient, Number(probe?.x402Version || 1), parsed);
-  } catch (err: any) {
-    return fail('header', `create_payment_header_failed:${err.message}`);
-  }
+    const viem: any = require('viem');
+    const viemAccounts: any = require('viem/accounts');
+    const viemChains: any = require('viem/chains');
+    const chainMap: Record<number, any> = { 8453: viemChains.base, 84532: viemChains.baseSepolia, 137: viemChains.polygon, 42161: viemChains.arbitrum };
+    const walletClient = viem.createWalletClient({
+      account: viemAccounts.privateKeyToAccount(pk),
+      chain: chainMap[chainCfg.chainId] || viemChains.base,
+      transport: viem.http(chainCfg.rpcUrl),
+    });
 
-  const isPost = String(method || 'GET').toUpperCase() === 'POST';
-  const accept0 = probe?.rawAccepts?.[0] || {};
-  const outputSchema = accept0?.outputSchema?.input || {};
-  const schemaQueryParams = outputSchema?.queryParams || {};
+    const x402Client: { createPaymentHeader: (w: any, v: number, r: any) => Promise<string> } = require('x402/client');
+    const x402Types: { PaymentRequirementsSchema: { parse: (x: unknown) => any } } = require('x402/types');
+    const networkToX402: Record<string, string> = {
+      'eip155:8453': 'base',
+      'eip155:84532': 'base-sepolia',
+      'eip155:137': 'polygon',
+      'eip155:42161': 'arbitrum',
+    };
+    const normalizedReq = {
+      ...accept,
+      scheme: 'exact',
+      network: networkToX402[caip2] || accept.network || 'base',
+      payTo: String(accept.payTo || '').trim(),
+      maxAmountRequired: String(accept.maxAmountRequired || accept.amount || ''),
+      resource: typeof accept.resource === 'string' ? accept.resource : url,
+      description: accept.description || 'x402-protected resource',
+      mimeType: accept.mimeType || 'application/json',
+    };
 
-  let paidUrl = url;
-  if (!isPost) {
-    const query = new URLSearchParams();
-    for (const [key, field] of Object.entries(schemaQueryParams as Record<string, any>)) {
-      if (field?.required) {
-        if (key === 'url') query.set(key, 'https://example.com');
-        else if (key === 'query') query.set(key, 'example');
-        else query.set(key, 'test');
+    let paymentHeader = '';
+    try {
+      const parsed = x402Types.PaymentRequirementsSchema.parse(normalizedReq);
+      paymentHeader = await x402Client.createPaymentHeader(walletClient, Number(probe?.x402Version || 1), parsed);
+    } catch (err: any) {
+      lastAttempt = { ...lastAttempt, reason: `create_payment_header_failed:${err.message}` };
+      continue;
+    }
+
+    const isPost = String(method || 'GET').toUpperCase() === 'POST';
+    const outputSchema = accept?.outputSchema?.input || {};
+    const schemaQueryParams = outputSchema?.queryParams || {};
+
+    let paidUrl = url;
+    if (!isPost) {
+      const query = new URLSearchParams();
+      for (const [key, field] of Object.entries(schemaQueryParams as Record<string, any>)) {
+        if (field?.required) {
+          if (key === 'url') query.set(key, 'https://example.com');
+          else if (key === 'query') query.set(key, 'example');
+          else query.set(key, 'test');
+        }
+      }
+      const qs = query.toString();
+      if (qs) paidUrl += (paidUrl.includes('?') ? '&' : '?') + qs;
+    }
+
+    let postBody: Record<string, any> = (sampleBody && typeof sampleBody === 'object') ? { ...sampleBody } : {};
+    if (isPost) {
+      const bodySchema = outputSchema?.body || {};
+      const requiredBodyFields: string[] = Array.isArray(bodySchema?.required) ? bodySchema.required : [];
+      for (const field of requiredBodyFields) {
+        if (postBody[field] != null) continue;
+        if (field === 'url') postBody[field] = 'https://example.com';
+        else if (field === 'query') postBody[field] = 'example';
+        else if (field.toLowerCase().includes('markdown') || field.toLowerCase().includes('html')) postBody[field] = false;
+        else postBody[field] = 'test';
       }
     }
-    const qs = query.toString();
-    if (qs) paidUrl += (paidUrl.includes('?') ? '&' : '?') + qs;
-  }
 
-  let postBody: Record<string, any> = (sampleBody && typeof sampleBody === 'object') ? { ...sampleBody } : {};
-  if (isPost) {
-    const bodySchema = outputSchema?.body || {};
-    const requiredBodyFields: string[] = Array.isArray(bodySchema?.required) ? bodySchema.required : [];
-    for (const field of requiredBodyFields) {
-      if (postBody[field] != null) continue;
-      if (field === 'url') postBody[field] = 'https://example.com';
-      else if (field === 'query') postBody[field] = 'example';
-      else if (field.toLowerCase().includes('markdown') || field.toLowerCase().includes('html')) postBody[field] = false;
-      else postBody[field] = 'test';
+    const body = isPost ? JSON.stringify(postBody) : undefined;
+    let fetchResp: Awaited<ReturnType<typeof fetch>>;
+    try {
+      fetchResp = await fetch(paidUrl, {
+        method: isPost ? 'POST' : 'GET',
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'gordon-trust-gate/1.0',
+          'X-PAYMENT': paymentHeader,
+          'PAYMENT-SIGNATURE': paymentHeader,
+          ...(isPost ? { 'Content-Type': 'application/json' } : {}),
+        },
+        body,
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (err: any) {
+      lastAttempt = { ...lastAttempt, reason: `fetch_failed:${err.message}` };
+      continue;
     }
+
+    const paidText = await fetchResp.text();
+    const receipt = fetchResp.headers.get('payment-response') || fetchResp.headers.get('x-payment-response');
+    const hasContent = paidText.trim().length > 20 && !/^\s*\{?\s*"error"/i.test(paidText.trim());
+
+    // Detect likely insufficient-funds pattern: still 402 after a valid payment header
+    const likelyInsufficientFunds = fetchResp.status === 402 &&
+      /insufficient|balance|funds|allowance/i.test(paidText);
+
+    const passed = fetchResp.status === 200 && Boolean(receipt) && hasContent;
+    if (passed) {
+      return {
+        passed: true,
+        stage: 'strict_pass',
+        network: caip2,
+        isCdpFacilitated,
+        unpaidStatus: probe.status || 402,
+        paidStatus: fetchResp.status,
+        hasPaymentResponseHeader: Boolean(receipt),
+        contentLength: paidText.length,
+        priceAtomic,
+        priceUsdc: priceAtomic / 1_000_000,
+      };
+    }
+
+    lastAttempt = {
+      ...lastAttempt,
+      network: caip2,
+      isCdpFacilitated,
+      unpaidStatus: probe.status || 402,
+      paidStatus: fetchResp.status,
+      hasPaymentResponseHeader: Boolean(receipt),
+      contentLength: paidText.length,
+      reason: likelyInsufficientFunds
+        ? 'insufficient_funds'
+        : isCdpFacilitated
+          ? `cdp_payment_rejected:${fetchResp.status}`
+          : `paid_status_${fetchResp.status}`,
+    };
   }
 
-  const body = isPost ? JSON.stringify(postBody) : undefined;
-  const paidResp = await fetch(paidUrl, {
-    method: isPost ? 'POST' : 'GET',
-    headers: {
-      Accept: 'application/json',
-      'User-Agent': 'gordon-trust-gate/1.0',
-      'X-PAYMENT': paymentHeader,
-      'PAYMENT-SIGNATURE': paymentHeader,
-      ...(isPost ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body,
-    signal: AbortSignal.timeout(30_000),
-  });
-  const paidText = await paidResp.text();
-  const receipt = paidResp.headers.get('payment-response') || paidResp.headers.get('x-payment-response');
-  const hasContent = paidText.trim().length > 20 && !/^\s*\{?\s*"error"/i.test(paidText.trim());
-
-  const passed = paidResp.status === 200 && Boolean(receipt) && hasContent;
+  // All payment options exhausted
   return {
-    passed,
-    stage: passed ? 'strict_pass' : 'paid_retry',
-    reason: passed ? undefined : `paid_status_${paidResp.status}`,
-    unpaidStatus: probe.status || 402,
-    paidStatus: paidResp.status,
-    hasPaymentResponseHeader: Boolean(receipt),
-    contentLength: paidText.length,
-    priceAtomic,
-    priceUsdc: priceAtomic / 1_000_000,
+    passed: false,
+    stage: 'paid_retry',
+    attemptsExhausted: sortedAccepts.length,
+    ...lastAttempt,
   };
 }
 
