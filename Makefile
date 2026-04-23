@@ -34,8 +34,8 @@ build: check-docker ## Build Docker images
 
 up: check-docker ## Start containers in production mode
 	$(DOCKER_COMPOSE) up -d
-	@echo "✓ API running at http://localhost:3000"
-	@echo "✓ Health check: http://localhost:3000/health"
+	@echo "✓ API running at http://localhost:3001"
+	@echo "✓ Health check: http://localhost:3001/health"
 
 down: ## Stop and remove containers
 	$(DOCKER_COMPOSE) down
@@ -61,7 +61,7 @@ restart: ## Restart containers
 
 dev: check-docker ## Start in development mode with hot reload
 	$(DOCKER_COMPOSE) -f docker-compose.dev.yml up -d
-	@echo "✓ Dev API running at http://localhost:3000"
+	@echo "✓ Dev API running at http://localhost:3001"
 	@echo "✓ DB Viewer at http://localhost:8080"
 	@echo ""
 	@echo "Next steps:"
