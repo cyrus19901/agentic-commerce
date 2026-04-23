@@ -19,5 +19,5 @@ else
   echo "✓ Auth enabled - JWT tokens required"
 fi
 
-echo "✓ Starting server on port ${PORT:-3000}..."
+echo "✓ Starting server on port ${PORT:-3001}..."
 exec "$@"

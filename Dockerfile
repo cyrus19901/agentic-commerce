@@ -41,11 +41,11 @@ COPY scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
 # Expose port
-EXPOSE 3000
+EXPOSE 3001
 
 # Health check with longer timeout for cold starts
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
 
 # Start the application
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
