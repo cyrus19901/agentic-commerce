@@ -22,6 +22,7 @@
     "test:e2e:provider-native-x402": "npx tsx tests/e2e/provider-native-x402-submit.ts",
     "test:e2e:provider-native-org-routing": "npx tsx tests/e2e/provider-native-org-routing.ts",
     "test:e2e:x402-flow": "npx tsx tests/e2e/x402-protocol-flow.ts",
+    "test:orthogonal-readiness": "tsx scripts/test-orthogonal-readiness.ts",
     "db:migrate": "npm run db:migrate --workspace=@agentic-commerce/database",
     "db:seed": "npm run db:seed --workspace=@agentic-commerce/database",
     "db:rollback": "npm run db:rollback --workspace=@agentic-commerce/database",

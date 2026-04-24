@@ -361,15 +361,11 @@ export function createV1Router(deps: {
           let requestUrl = endpointUrl;
           let requestBody: string | undefined;
           if (isPost) {
-            const bodyObj: Record<string, any> = {};
-            if (params && typeof params === 'object') Object.assign(bodyObj, params);
-            requestBody = JSON.stringify(bodyObj);
-          } else if (params && typeof params === 'object') {
-            const qsObj: Record<string, string> = {};
-            for (const [k, v] of Object.entries(params as Record<string, any>)) {
-              qsObj[k] = String(v);
-            }
-            const qs = new URLSearchParams(qsObj).toString();
+            const built = buildProviderRequestPayload(params, accept, 'POST');
+            requestBody = built.requestBody;
+          } else {
+            const built = buildProviderRequestPayload(params, accept, 'GET');
+            const qs = built.queryString || '';
             if (qs) requestUrl += (requestUrl.includes('?') ? '&' : '?') + qs;
           }
 
@@ -1363,11 +1359,16 @@ export function createV1Router(deps: {
       try {
         const targetUrl = String(req.query.url || '').trim();
         const preferredMethod = String(req.query.method || '').trim().toUpperCase();
+        const sampleBodyRaw = req.query.sample_body;
         if (!targetUrl) {
           res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'url is required' } });
           return;
         }
-        const probe = await probeX402Endpoint(targetUrl, preferredMethod || undefined);
+        const sampleBody = typeof sampleBodyRaw === 'string' && sampleBodyRaw.trim()
+          ? JSON.parse(sampleBodyRaw)
+          : undefined;
+        const providedSamples = sampleBody == null ? undefined : (Array.isArray(sampleBody) ? sampleBody : [sampleBody]);
+        const probe = await probeX402Endpoint(targetUrl, preferredMethod || undefined, providedSamples);
         res.json(probe);
       } catch (err: any) {
         res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
@@ -1384,6 +1385,8 @@ export function createV1Router(deps: {
         const name = String(req.body?.name || '').trim();
         const category = String(req.body?.category || '').trim();
         const preferredMethod = String(req.body?.method || '').trim().toUpperCase();
+        const sampleBody = req.body?.sample_body ?? req.body?.sampleBody;
+        const providedSamples = sampleBody == null ? undefined : (Array.isArray(sampleBody) ? sampleBody : [sampleBody]);
         const strictDefault = String(process.env.MARKETPLACE_REQUIRE_STRICT || 'false').toLowerCase() === 'true';
         const requireStrict = req.body?.requireStrict ?? req.body?.require_strict ?? strictDefault;
 
@@ -1392,12 +1395,12 @@ export function createV1Router(deps: {
           return;
         }
 
-        let probe = await probeX402Endpoint(targetUrl, preferredMethod || undefined);
+        let probe = await probeX402Endpoint(targetUrl, preferredMethod || undefined, providedSamples);
         let resolvedFromDiscovery: string | null = null;
         if (!probe.x402Compatible) {
           const discovered = await resolveDiscoveryResourceForUrl(targetUrl);
           if (discovered && discovered !== targetUrl) {
-            const probe2 = await probeX402Endpoint(discovered, preferredMethod || undefined);
+            const probe2 = await probeX402Endpoint(discovered, preferredMethod || undefined, providedSamples);
             if (probe2.x402Compatible) {
               targetUrl = discovered;
               probe = probe2;
@@ -1430,7 +1433,9 @@ export function createV1Router(deps: {
           return;
         }
 
-        const providerId = buildProviderId(name || targetUrl);
+        // Use endpoint URL as identity key so providers with the same display
+        // name (common in Orthogonal catalogs) do not overwrite each other.
+        const providerId = buildProviderId(targetUrl);
         const providerName = name || new URL(targetUrl).hostname;
         const networks = probe.rawAccepts.map((a: any) => String(a.network || '')).filter(Boolean);
         const action = 'request';
@@ -1777,7 +1782,63 @@ function inferRequiredInputsFromCatalogRow(row: any): string[] {
   return [...out];
 }
 
-async function probeX402Endpoint(url: string, preferredMethod?: string): Promise<any> {
+function buildProviderRequestPayload(params: any, accept: any, method: 'GET' | 'POST'): {
+  requestBody?: string;
+  queryString?: string;
+} {
+  const rawParams: Record<string, any> = params && typeof params === 'object' ? { ...params } : {};
+  const canonicalText =
+    (typeof rawParams.query === 'string' && rawParams.query.trim()) ||
+    (typeof rawParams.input === 'string' && rawParams.input.trim()) ||
+    (typeof rawParams.url === 'string' && rawParams.url.trim()) ||
+    (typeof rawParams.domain === 'string' && rawParams.domain.trim()) ||
+    '';
+
+  const schemaInput = accept?.outputSchema?.input || {};
+  const expectedBodyKeys = new Set<string>([
+    ...Object.keys(schemaInput?.body?.properties || {}),
+    ...((Array.isArray(schemaInput?.body?.required) ? schemaInput.body.required : []).map(String)),
+    ...Object.keys(schemaInput?.bodyFields || {}),
+  ]);
+  const expectedQueryKeys = new Set<string>([
+    ...Object.keys(schemaInput?.queryParams || {}),
+  ]);
+
+  if (method === 'POST') {
+    let bodyObj: Record<string, any> = {};
+    if (expectedBodyKeys.size > 0) {
+      for (const k of expectedBodyKeys) {
+        if (rawParams[k] !== undefined) bodyObj[k] = rawParams[k];
+      }
+      if (Object.keys(bodyObj).length === 0 && canonicalText) {
+        const preferred = ['query', 'prompt', 'text', 'input', 'q', 'search', 'keyword', 'keywords']
+          .find((k) => expectedBodyKeys.has(k));
+        if (preferred) bodyObj[preferred] = canonicalText;
+        else if (expectedBodyKeys.size === 1) bodyObj[[...expectedBodyKeys][0]] = canonicalText;
+      }
+    } else {
+      bodyObj = rawParams;
+    }
+    return { requestBody: JSON.stringify(bodyObj) };
+  }
+
+  const qsObj: Record<string, string> = {};
+  if (expectedQueryKeys.size > 0) {
+    for (const k of expectedQueryKeys) {
+      if (rawParams[k] !== undefined) qsObj[k] = String(rawParams[k]);
+    }
+    if (Object.keys(qsObj).length === 0 && canonicalText) {
+      const preferred = ['query', 'q', 'search', 'keyword'].find((k) => expectedQueryKeys.has(k));
+      if (preferred) qsObj[preferred] = canonicalText;
+      else if (expectedQueryKeys.size === 1) qsObj[[...expectedQueryKeys][0]] = canonicalText;
+    }
+  } else {
+    for (const [k, v] of Object.entries(rawParams)) qsObj[k] = String(v);
+  }
+  return { queryString: new URLSearchParams(qsObj).toString() };
+}
+
+async function probeX402Endpoint(url: string, preferredMethod?: string, providedSampleBodies?: any[]): Promise<any> {
   const methods = preferredMethod
     ? [preferredMethod]
     : ['GET', 'POST'];
@@ -1800,8 +1861,11 @@ async function probeX402Endpoint(url: string, preferredMethod?: string): Promise
   let lastStatus = 0;
   let lastError: string | null = null;
   for (const method of methods) {
+    const callerBodies = Array.isArray(providedSampleBodies) && providedSampleBodies.length > 0
+      ? providedSampleBodies
+      : [];
     const candidateBodies: any[] = method === 'POST'
-      ? [{}, { query: 'hello' }, { url: 'https://example.com' }, { prompt: 'hello' }]
+      ? [...callerBodies, {}, { query: 'hello' }, { url: 'https://example.com' }, { prompt: 'hello' }]
       : [null];
 
     for (const sampleBody of candidateBodies) {
